@@ -34,6 +34,9 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund --ignore-scripts
 
+      - name: Align Expo package versions
+        run: npx expo install --check --fix || true
+
       - name: Generate native android project
         run: npx expo prebuild --platform android --no-install --clean
         env:
