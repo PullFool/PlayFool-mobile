@@ -1,0 +1,78 @@
+import React from 'react';
+import { StatusBar } from 'expo-status-bar';
+import { View, StyleSheet } from 'react-native';
+import { NavigationContainer } from '@react-navigation/native';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { Ionicons } from '@expo/vector-icons';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+
+import { PlayerProvider } from './src/context/PlayerContext';
+import Player from './src/components/Player';
+import { installErrorReporter } from './src/utils/errorReporter';
+
+installErrorReporter();
+import MyMusic from './src/screens/MyMusic';
+import YouTube from './src/screens/YouTube';
+import Playlists from './src/screens/Playlists';
+import Settings from './src/screens/Settings';
+import { theme } from './src/utils/theme';
+
+const Tab = createBottomTabNavigator();
+
+const navTheme = {
+  dark: true,
+  colors: {
+    primary: theme.green,
+    background: theme.bgPrimary,
+    card: theme.bgSecondary,
+    text: theme.textPrimary,
+    border: theme.border,
+    notification: theme.green,
+  },
+};
+
+const screenOptions = ({ route }) => ({
+  headerShown: false,
+  tabBarActiveTintColor: theme.green,
+  tabBarInactiveTintColor: theme.textMuted,
+  tabBarStyle: {
+    backgroundColor: theme.bgSecondary,
+    borderTopColor: theme.border,
+  },
+  tabBarIcon: ({ color, size }) => {
+    const map = {
+      'My Music': 'home',
+      'YouTube': 'logo-youtube',
+      'Playlists': 'list',
+      'Settings': 'settings',
+    };
+    return <Ionicons name={map[route.name] || 'help'} size={size} color={color} />;
+  },
+});
+
+export default function App() {
+  return (
+    <SafeAreaProvider>
+      <PlayerProvider>
+        <SafeAreaView style={styles.root} edges={['top']}>
+          <NavigationContainer theme={navTheme}>
+            <View style={{ flex: 1 }}>
+              <Tab.Navigator screenOptions={screenOptions}>
+                <Tab.Screen name="My Music" component={MyMusic} />
+                <Tab.Screen name="YouTube" component={YouTube} />
+                <Tab.Screen name="Playlists" component={Playlists} />
+                <Tab.Screen name="Settings" component={Settings} />
+              </Tab.Navigator>
+              <Player />
+            </View>
+          </NavigationContainer>
+        </SafeAreaView>
+        <StatusBar style="light" backgroundColor={theme.bgPrimary} />
+      </PlayerProvider>
+    </SafeAreaProvider>
+  );
+}
+
+const styles = StyleSheet.create({
+  root: { flex: 1, backgroundColor: theme.bgPrimary },
+});
