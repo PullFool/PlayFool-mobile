@@ -1,0 +1,85 @@
+name: Build Android APK
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund --ignore-scripts
+
+      - name: Generate native android project
+        run: npx expo prebuild --platform android --no-install --clean
+        env:
+          EXPO_PUBLIC_DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_MOBILE }}
+
+      - name: Build release APK
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon
+        env:
+          EXPO_PUBLIC_DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_MOBILE }}
+
+      - name: Locate APK
+        id: apk
+        run: |
+          APK_PATH=$(find android/app/build/outputs/apk -name "*.apk" | head -n 1)
+          echo "Found APK at $APK_PATH"
+          NEW_PATH="PlayFool-${{ github.ref_name }}.apk"
+          cp "$APK_PATH" "$NEW_PATH"
+          echo "apk_path=$NEW_PATH" >> $GITHUB_OUTPUT
+
+      - name: Upload APK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PlayFool-Android-APK
+          path: ${{ steps.apk.outputs.apk_path }}
+
+      - name: Attach APK to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.apk.outputs.apk_path }}
+          name: PlayFool Mobile ${{ github.ref_name }}
+          body: |
+            ## PlayFool Mobile (Android)
+
+            Free music player with built-in YouTube search and MP3 download.
+
+            ### Install
+            1. Download `PlayFool-${{ github.ref_name }}.apk` below
+            2. On your Android phone, tap to install (allow "unknown sources" if prompted)
+            3. Open PlayFool — search YouTube, download MP3s, play offline
+
+            ### Features
+            - In-app YouTube search (no PC needed)
+            - MP3 downloads stored in app
+            - Background playback
+            - Dark theme matching desktop PlayFool
+
+            Made by PullFool
