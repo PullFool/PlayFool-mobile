@@ -4,37 +4,58 @@
 import * as FileSystem from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
 
-// Public Piped instances to try in order. If one is down or rate-limited, fall through.
-// List curated from https://piped-instances.kavin.rocks/ in 2025.
+// Public Piped instances. Many have been shut down or rate-limited as YouTube
+// cracks down — keep this list short and current.
 const PIPED_INSTANCES = [
   'https://pipedapi.kavin.rocks',
-  'https://pipedapi-libre.kavin.rocks',
   'https://piped-api.privacy.com.de',
   'https://pipedapi.adminforge.de',
   'https://pipedapi.smnz.de',
-  'https://api-piped.mha.fi',
-  'https://pipedapi.darkness.services',
+  'https://pipedapi.reallyaweso.me',
+  'https://pipedapi.r4fo.com',
+  'https://pipedapi.ducks.party',
 ];
 
-async function pipedFetch(path) {
+// Invidious is a parallel project with the same idea. We use these as a
+// search-only fallback if every Piped instance is unreachable.
+const INVIDIOUS_INSTANCES = [
+  'https://invidious.f5.si',
+  'https://yewtu.be',
+  'https://invidious.private.coffee',
+  'https://iv.melmac.space',
+  'https://inv.nadeko.net',
+];
+
+// Cobalt is the most reliable audio-URL provider — they handle PoToken on their
+// servers and support a simple POST API. Used for getAudioStreamUrl().
+const COBALT_INSTANCES = [
+  'https://api.cobalt.tools',
+  'https://co.wuk.sh',
+  'https://cobalt-api.kwiatekmiki.com',
+];
+
+async function tryFetch(bases, pathOrFactory, init = {}) {
   let lastError;
-  for (const base of PIPED_INSTANCES) {
+  for (const base of bases) {
     try {
-      const res = await fetch(base + path, {
-        headers: { Accept: 'application/json' },
+      const url = typeof pathOrFactory === 'function' ? pathOrFactory(base) : base + pathOrFactory;
+      const res = await fetch(url, {
+        ...init,
+        headers: { Accept: 'application/json', ...(init.headers || {}) },
       });
       if (!res.ok) {
         lastError = new Error(`${base} returned ${res.status}`);
         continue;
       }
-      const data = await res.json();
-      return data;
+      return await res.json();
     } catch (e) {
       lastError = e;
     }
   }
-  throw lastError || new Error('All Piped instances failed');
+  throw lastError || new Error('All instances failed');
 }
+
+const pipedFetch = (path) => tryFetch(PIPED_INSTANCES, path);
 
 const fmtDuration = (seconds) => {
   if (!seconds || seconds < 0) return '';
@@ -50,9 +71,8 @@ function videoIdFromPipedItem(item) {
   return match ? match[1] : null;
 }
 
-export async function searchMusic(query, limit = 30) {
-  // filter=music_songs gets cleaner audio results, falls through to videos otherwise
-  const data = await pipedFetch(`/search?q=${encodeURIComponent(query)}&filter=music_songs`);
+async function searchViaPiped(query, limit) {
+  const data = await pipedFetch(`/search?q=${encodeURIComponent(query)}&filter=videos`);
   const items = (data?.items || []).filter((it) => it.type === 'stream' || !it.type);
   const mapped = [];
   const seen = new Set();
@@ -70,26 +90,38 @@ export async function searchMusic(query, limit = 30) {
     });
     if (mapped.length >= limit) break;
   }
-  // If music_songs returned almost nothing, retry with a broader search
-  if (mapped.length < 5) {
-    const data2 = await pipedFetch(`/search?q=${encodeURIComponent(query)}&filter=videos`);
-    const items2 = (data2?.items || []).filter((it) => it.type === 'stream' || !it.type);
-    for (const it of items2) {
-      const id = videoIdFromPipedItem(it);
-      if (!id || seen.has(id)) continue;
-      seen.add(id);
-      mapped.push({
-        id,
-        title: it.title || '',
-        channel: it.uploaderName || it.uploader || 'YouTube',
-        duration: fmtDuration(it.duration),
-        thumbnail: it.thumbnail || null,
-        url: `https://www.youtube.com/watch?v=${id}`,
-      });
-      if (mapped.length >= limit) break;
-    }
+  return mapped;
+}
+
+async function searchViaInvidious(query, limit) {
+  const items = await tryFetch(INVIDIOUS_INSTANCES,
+    `/api/v1/search?q=${encodeURIComponent(query)}&type=video`);
+  const mapped = [];
+  const seen = new Set();
+  for (const it of items || []) {
+    const id = it.videoId;
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    mapped.push({
+      id,
+      title: it.title || '',
+      channel: it.author || 'YouTube',
+      duration: fmtDuration(it.lengthSeconds),
+      thumbnail: it.videoThumbnails?.[0]?.url || null,
+      url: `https://www.youtube.com/watch?v=${id}`,
+    });
+    if (mapped.length >= limit) break;
   }
   return mapped;
+}
+
+export async function searchMusic(query, limit = 30) {
+  // Try Piped first; if every instance is unreachable, fall back to Invidious.
+  try {
+    const r = await searchViaPiped(query, limit);
+    if (r.length > 0) return r;
+  } catch (e) { /* fall through */ }
+  return searchViaInvidious(query, limit);
 }
 
 function pickBestAudio(streams) {
@@ -104,11 +136,46 @@ function pickBestAudio(streams) {
   return sorted[0];
 }
 
-export async function getAudioStreamUrl(videoId) {
+async function getAudioFromPiped(videoId) {
   const data = await pipedFetch(`/streams/${videoId}`);
   const fmt = pickBestAudio(data?.audioStreams);
-  if (!fmt?.url) throw new Error('No playable audio stream found');
-  return fmt.url;
+  return fmt?.url || null;
+}
+
+async function getAudioFromCobalt(videoId) {
+  // Cobalt POST /api/json with the video URL
+  let lastError;
+  for (const base of COBALT_INSTANCES) {
+    try {
+      const res = await fetch(`${base}/api/json`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({
+          url: `https://www.youtube.com/watch?v=${videoId}`,
+          isAudioOnly: true,
+          audioFormat: 'best',
+        }),
+      });
+      if (!res.ok) { lastError = new Error(`${base} ${res.status}`); continue; }
+      const data = await res.json();
+      if (data?.url) return data.url;
+      if (data?.audio) return data.audio;
+      lastError = new Error(`${base} returned no url`);
+    } catch (e) { lastError = e; }
+  }
+  if (lastError) throw lastError;
+  return null;
+}
+
+export async function getAudioStreamUrl(videoId) {
+  // Try Piped first (direct CDN url, fastest), fall back to Cobalt.
+  try {
+    const url = await getAudioFromPiped(videoId);
+    if (url) return url;
+  } catch (e) { /* fall through */ }
+  const url = await getAudioFromCobalt(videoId);
+  if (!url) throw new Error('No playable audio stream found');
+  return url;
 }
 
 const sanitize = (name) =>
