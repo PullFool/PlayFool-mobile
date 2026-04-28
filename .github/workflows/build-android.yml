@@ -34,13 +34,8 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund --ignore-scripts
 
-      - name: Align Expo package versions
-        run: npx expo install --check --fix || true
-
-      - name: Generate native android project
-        run: npx expo prebuild --platform android --no-install --clean
-        env:
-          EXPO_PUBLIC_DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_MOBILE }}
+      - name: Inject Discord webhook into env
+        run: echo "EXPO_PUBLIC_DISCORD_WEBHOOK=${{ secrets.DISCORD_WEBHOOK_MOBILE }}" >> $GITHUB_ENV
 
       - name: Build release APK
         working-directory: android

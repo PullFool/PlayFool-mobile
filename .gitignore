@@ -1,6 +1,17 @@
 node_modules/
 .expo/
 dist/
+
+# Don't ignore android/ — we commit the prebuilt native project
+android/build/
+android/app/build/
+android/.gradle/
+android/local.properties
+android/.idea/
+android/captures/
+android/*.iml
+android/app/release/
+android/app/debug/
 npm-debug.*
 *.jks
 *.p8
