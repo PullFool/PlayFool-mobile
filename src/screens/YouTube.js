@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../utils/theme';
 import { searchMusic, getAudioStreamUrl, downloadAudio } from '../utils/yt';
 import { usePlayer } from '../context/PlayerContext';
+import { reportError } from '../utils/errorReporter';
 
 export default function YouTube() {
   const { playSong } = usePlayer();
@@ -22,6 +23,7 @@ export default function YouTube() {
       const data = await searchMusic(query.trim(), 30);
       setResults(data);
     } catch (e) {
+      reportError('search', e, { query: query.trim() });
       setError(e.message || 'Search failed.');
       setResults([]);
     } finally {
@@ -41,6 +43,7 @@ export default function YouTube() {
         source: 'preview',
       }], 0);
     } catch (e) {
+      reportError('preview', e, { videoId: video.id });
       setError('Preview failed: ' + e.message);
     }
   };
@@ -54,6 +57,7 @@ export default function YouTube() {
       });
       setDownloadState(s => ({ ...s, [video.id]: 'done' }));
     } catch (e) {
+      reportError('download', e, { videoId: video.id, title: video.title });
       setError('Download failed: ' + e.message);
       setDownloadState(s => { const n = { ...s }; delete n[video.id]; return n; });
     }

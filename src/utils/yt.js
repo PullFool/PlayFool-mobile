@@ -2,46 +2,57 @@
 // Designed for React Native — no Node-only modules, no native deps.
 import * as FileSystem from 'expo-file-system';
 
-// Innertube web client — these constants are publicly known and used by YouTube.com itself.
-const INNERTUBE_API_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
-const INNERTUBE_CLIENT_VERSION = '2.20240801.00.00';
-const INNERTUBE_ANDROID_VERSION = '19.29.37';
-
-const WEB_CONTEXT = {
-  client: {
-    clientName: 'WEB',
-    clientVersion: INNERTUBE_CLIENT_VERSION,
-    hl: 'en',
-    gl: 'US',
-  },
+// Innertube clients. These constants are baked into YouTube.com itself and are public knowledge.
+const WEB_CLIENT = {
+  apiKey: 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
+  clientName: 'WEB',
+  clientNameId: '1',
+  clientVersion: '2.20241010.00.00',
+  userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
 };
 
-// Android client returns deciphered stream URLs more reliably for many videos.
-const ANDROID_CONTEXT = {
-  client: {
-    clientName: 'ANDROID',
-    clientVersion: INNERTUBE_ANDROID_VERSION,
-    androidSdkVersion: 34,
-    hl: 'en',
-    gl: 'US',
-    userAgent: `com.google.android.youtube/${INNERTUBE_ANDROID_VERSION} (Linux; U; Android 14)`,
-  },
+const ANDROID_CLIENT = {
+  apiKey: 'AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w',
+  clientName: 'ANDROID',
+  clientNameId: '3',
+  clientVersion: '19.29.37',
+  androidSdkVersion: 34,
+  userAgent: 'com.google.android.youtube/19.29.37 (Linux; U; Android 14) gzip',
 };
 
-async function innertube(endpoint, body, context = WEB_CONTEXT) {
+function buildContext(client) {
+  const ctx = {
+    client: {
+      clientName: client.clientName,
+      clientVersion: client.clientVersion,
+      hl: 'en',
+      gl: 'US',
+    },
+  };
+  if (client.androidSdkVersion) ctx.client.androidSdkVersion = client.androidSdkVersion;
+  if (client.userAgent) ctx.client.userAgent = client.userAgent;
+  return ctx;
+}
+
+async function innertube(endpoint, body, client = WEB_CLIENT) {
   const res = await fetch(
-    `https://www.youtube.com/youtubei/v1/${endpoint}?key=${INNERTUBE_API_KEY}&prettyPrint=false`,
+    `https://www.youtube.com/youtubei/v1/${endpoint}?key=${client.apiKey}&prettyPrint=false`,
     {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-YouTube-Client-Name': context.client.clientName === 'ANDROID' ? '3' : '1',
-        'X-YouTube-Client-Version': context.client.clientVersion,
+        'X-YouTube-Client-Name': client.clientNameId,
+        'X-YouTube-Client-Version': client.clientVersion,
+        'User-Agent': client.userAgent,
+        Origin: 'https://www.youtube.com',
       },
-      body: JSON.stringify({ context, ...body }),
+      body: JSON.stringify({ context: buildContext(client), ...body }),
     }
   );
-  if (!res.ok) throw new Error(`YouTube API ${res.status}`);
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`YouTube ${endpoint} ${res.status}: ${text.slice(0, 200)}`);
+  }
   return res.json();
 }
 
@@ -108,8 +119,12 @@ function pickAudioFormat(playerResp) {
 }
 
 export async function getAudioStreamUrl(videoId) {
-  // ANDROID client tends to return non-deciphered URLs that work directly.
-  const data = await innertube('player', { videoId }, ANDROID_CONTEXT);
+  // ANDROID client returns non-deciphered URLs we can use directly.
+  const data = await innertube(
+    'player',
+    { videoId, contentCheckOk: true, racyCheckOk: true },
+    ANDROID_CLIENT
+  );
   const fmt = pickAudioFormat(data);
   if (!fmt?.url) throw new Error('No playable audio stream found');
   return fmt.url;
