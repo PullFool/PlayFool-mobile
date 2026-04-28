@@ -7,7 +7,9 @@ import * as Application from 'expo-application';
 // In dev (expo start) this is undefined and error reporting is silently skipped.
 const DISCORD_WEBHOOK = process.env.EXPO_PUBLIC_DISCORD_WEBHOOK || '';
 
-const APP_VERSION = '1.0.0';
+// Read the actual installed version from the APK manifest at runtime,
+// so error reports always reflect what the user is actually running.
+const APP_VERSION = Application.nativeApplicationVersion || 'dev';
 const recentErrors = new Map();
 const DEDUP_WINDOW_MS = 30000;
 
