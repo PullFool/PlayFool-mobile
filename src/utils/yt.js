@@ -21,8 +21,7 @@ const ANDROID_CLIENT = {
   userAgent: 'com.google.android.youtube/19.29.37 (Linux; U; Android 14) gzip',
 };
 
-// IOS client — most reliable for getting plain (non-deciphered) audio URLs
-// without YouTube's aggressive bot checks.
+// IOS client — used to be most reliable, lately failing with "Precondition check failed"
 const IOS_CLIENT = {
   apiKey: 'AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc',
   clientName: 'IOS',
@@ -30,6 +29,26 @@ const IOS_CLIENT = {
   clientVersion: '19.29.1',
   deviceModel: 'iPhone16,2',
   userAgent: 'com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)',
+};
+
+// ANDROID_VR client — currently the most reliable for player.
+// YouTube doesn't enforce anti-bot precondition checks on this surface yet.
+const ANDROID_VR_CLIENT = {
+  apiKey: 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
+  clientName: 'ANDROID_VR',
+  clientNameId: '28',
+  clientVersion: '1.60.19',
+  androidSdkVersion: 32,
+  userAgent: 'com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip',
+};
+
+// TVHTML5_SIMPLY_EMBEDDED_PLAYER — embed player surface, works for most public videos.
+const TV_EMBED_CLIENT = {
+  apiKey: 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
+  clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
+  clientNameId: '85',
+  clientVersion: '2.0',
+  userAgent: 'Mozilla/5.0 (PlayStation; PlayStation 4/12.00) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15',
 };
 
 function buildContext(client) {
@@ -132,18 +151,22 @@ function pickAudioFormat(playerResp) {
 }
 
 export async function getAudioStreamUrl(videoId) {
-  // Try IOS client first (most reliable, returns un-deciphered URLs).
-  // Fall back to ANDROID if IOS rejects.
+  // YouTube tightens its bot checks on different client surfaces over time.
+  // Walk through the most reliable clients until one returns a usable url.
   const body = { videoId, contentCheckOk: true, racyCheckOk: true };
-  let data;
-  try {
-    data = await innertube('player', body, IOS_CLIENT);
-  } catch (e) {
-    data = await innertube('player', body, ANDROID_CLIENT);
+  const clients = [ANDROID_VR_CLIENT, TV_EMBED_CLIENT, IOS_CLIENT, ANDROID_CLIENT];
+  let lastError;
+  for (const client of clients) {
+    try {
+      const data = await innertube('player', body, client);
+      const fmt = pickAudioFormat(data);
+      if (fmt?.url) return fmt.url;
+      lastError = new Error(`No playable audio in ${client.clientName} response`);
+    } catch (e) {
+      lastError = e;
+    }
   }
-  const fmt = pickAudioFormat(data);
-  if (!fmt?.url) throw new Error('No playable audio stream found');
-  return fmt.url;
+  throw lastError || new Error('No playable audio stream found');
 }
 
 const sanitize = (name) => (name || 'audio').replace(/[<>:"/\\|?*]+/g, '').slice(0, 120);
