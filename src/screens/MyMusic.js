@@ -5,6 +5,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { theme } from '../utils/theme';
 import { listLocalAudio, deleteLocalAudio } from '../utils/yt';
 import { usePlayer } from '../context/PlayerContext';
+import { reportError } from '../utils/errorReporter';
 
 export default function MyMusic() {
   const { playSong, shufflePlay, currentSong, isPlaying } = usePlayer();
@@ -17,6 +18,8 @@ export default function MyMusic() {
     try {
       const list = await listLocalAudio();
       setSongs(list);
+    } catch (e) {
+      reportError('mymusic.load', e);
     } finally {
       setLoading(false);
     }
@@ -38,7 +41,8 @@ export default function MyMusic() {
         { text: 'Cancel', style: 'cancel' },
         {
           text: 'Delete', style: 'destructive', onPress: async () => {
-            try { await deleteLocalAudio(song.url); load(); } catch (e) {}
+            try { await deleteLocalAudio(song.url); load(); }
+            catch (e) { reportError('mymusic.delete', e, { uri: song.url }); }
           },
         },
       ]

@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useRef, useCallback, useEffect } from 'react';
 import { Audio } from 'expo-av';
+import { reportError } from '../utils/errorReporter';
 
 const PlayerContext = createContext();
 export const usePlayer = () => useContext(PlayerContext);
@@ -24,7 +25,7 @@ export function PlayerProvider({ children }) {
       playsInSilentModeIOS: true,
       shouldDuckAndroid: true,
       playThroughEarpieceAndroid: false,
-    }).catch(() => {});
+    }).catch((e) => reportError('audio.setMode', e));
   }, []);
 
   const unload = async () => {
@@ -59,6 +60,7 @@ export function PlayerProvider({ children }) {
       );
       soundRef.current = sound;
     } catch (e) {
+      reportError('player.playSong', e, { songUrl: song.url, title: song.title });
       console.error('Play failed:', e);
     }
   }, []);
