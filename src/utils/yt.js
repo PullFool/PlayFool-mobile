@@ -1,6 +1,7 @@
 // Minimal YouTube client built on the public Innertube API + fetch.
 // Designed for React Native — no Node-only modules, no native deps.
 import * as FileSystem from 'expo-file-system';
+import * as MediaLibrary from 'expo-media-library';
 
 // Innertube clients. These constants are baked into YouTube.com itself and are public knowledge.
 const WEB_CLIENT = {
@@ -177,4 +178,45 @@ export async function listLocalAudio() {
 
 export async function deleteLocalAudio(uri) {
   await FileSystem.deleteAsync(uri, { idempotent: true });
+}
+
+// Ask for permission and scan every audio file on the phone via MediaLibrary.
+// Returns songs in the same shape as listLocalAudio() so they merge cleanly.
+export async function scanPhoneAudio({ onProgress } = {}) {
+  const perm = await MediaLibrary.requestPermissionsAsync();
+  if (!perm.granted) {
+    const err = new Error('Audio library permission denied');
+    err.code = 'PERMISSION_DENIED';
+    throw err;
+  }
+
+  const PAGE_SIZE = 100;
+  const all = [];
+  let endCursor;
+  let hasNextPage = true;
+
+  while (hasNextPage) {
+    const page = await MediaLibrary.getAssetsAsync({
+      mediaType: MediaLibrary.MediaType.audio,
+      first: PAGE_SIZE,
+      after: endCursor,
+    });
+    for (const asset of page.assets) {
+      // Skip ringtones / notification sounds (very short)
+      if ((asset.duration || 0) < 10) continue;
+      all.push({
+        id: 'scan-' + asset.id,
+        title: (asset.filename || '').replace(/\.[^.]+$/, '') || 'Unknown',
+        artist: 'Phone',
+        url: asset.uri,
+        cover: null,
+        source: 'scanned',
+        duration: asset.duration,
+      });
+    }
+    endCursor = page.endCursor;
+    hasNextPage = page.hasNextPage;
+    if (onProgress) onProgress(all.length);
+  }
+  return all;
 }

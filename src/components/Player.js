@@ -1,8 +1,9 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { usePlayer } from '../context/PlayerContext';
 import { theme } from '../utils/theme';
+import LyricsModal from './LyricsModal';
 
 const fmt = (s) => {
   if (!s || isNaN(s)) return '0:00';
@@ -13,6 +14,7 @@ const fmt = (s) => {
 
 export default function Player() {
   const { currentSong, isPlaying, position, duration, togglePlayPause, skipNext, skipPrev, seekTo } = usePlayer();
+  const [showLyrics, setShowLyrics] = useState(false);
 
   if (!currentSong) return null;
   const progress = duration ? (position / duration) * 100 : 0;
@@ -42,7 +44,14 @@ export default function Player() {
           <TouchableOpacity onPress={skipNext}><Ionicons name="play-skip-forward" size={22} color={theme.textPrimary} /></TouchableOpacity>
         </View>
       </View>
-      <Text style={styles.time}>{fmt(position)} / {fmt(duration)}</Text>
+      <View style={styles.bottomRow}>
+        <TouchableOpacity onPress={() => setShowLyrics(true)} style={styles.lyricsBtn}>
+          <Ionicons name="document-text-outline" size={14} color={theme.textMuted} />
+          <Text style={styles.lyricsBtnText}>Lyrics</Text>
+        </TouchableOpacity>
+        <Text style={styles.time}>{fmt(position)} / {fmt(duration)}</Text>
+      </View>
+      <LyricsModal open={showLyrics} song={currentSong} onClose={() => setShowLyrics(false)} />
     </View>
   );
 }
@@ -58,5 +67,8 @@ const styles = StyleSheet.create({
   artist: { color: theme.textSecondary, fontSize: 11 },
   controls: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   playBtn: { width: 32, height: 32, borderRadius: 16, backgroundColor: theme.green, alignItems: 'center', justifyContent: 'center' },
-  time: { color: theme.textMuted, fontSize: 10, textAlign: 'right', marginTop: 4 },
+  bottomRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 },
+  lyricsBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, padding: 4 },
+  lyricsBtnText: { color: theme.textMuted, fontSize: 11 },
+  time: { color: theme.textMuted, fontSize: 10 },
 });

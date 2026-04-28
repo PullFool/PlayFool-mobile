@@ -1,23 +1,35 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, FlatList, TextInput, TouchableOpacity, StyleSheet, RefreshControl, Alert } from 'react-native';
+import { View, Text, FlatList, TextInput, TouchableOpacity, StyleSheet, RefreshControl, Alert, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { theme } from '../utils/theme';
-import { listLocalAudio, deleteLocalAudio } from '../utils/yt';
+import { listLocalAudio, deleteLocalAudio, scanPhoneAudio } from '../utils/yt';
 import { usePlayer } from '../context/PlayerContext';
 import { reportError } from '../utils/errorReporter';
+import AddToPlaylistModal from '../components/AddToPlaylistModal';
+
+const SCAN_CACHE_KEY = 'playfool_mobile_scan_cache';
 
 export default function MyMusic() {
   const { playSong, shufflePlay, currentSong, isPlaying } = usePlayer();
-  const [songs, setSongs] = useState([]);
+  const [downloaded, setDownloaded] = useState([]);
+  const [scanned, setScanned] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [scanning, setScanning] = useState(false);
   const [query, setQuery] = useState('');
+  const [addToPlaylistSong, setAddToPlaylistSong] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const list = await listLocalAudio();
-      setSongs(list);
+      setDownloaded(list);
+      // Restore scan cache
+      const cached = await AsyncStorage.getItem(SCAN_CACHE_KEY);
+      if (cached) {
+        try { setScanned(JSON.parse(cached)); } catch (e) {}
+      }
     } catch (e) {
       reportError('mymusic.load', e);
     } finally {
@@ -25,8 +37,35 @@ export default function MyMusic() {
     }
   }, []);
 
+  const handleScan = useCallback(async () => {
+    setScanning(true);
+    try {
+      const list = await scanPhoneAudio();
+      setScanned(list);
+      await AsyncStorage.setItem(SCAN_CACHE_KEY, JSON.stringify(list));
+    } catch (e) {
+      if (e.code === 'PERMISSION_DENIED') {
+        Alert.alert('Permission needed', 'PlayFool needs access to your audio files to scan them. Open Settings → PlayFool → Permissions to allow.');
+      } else {
+        reportError('mymusic.scan', e);
+        Alert.alert('Scan failed', e.message || 'Could not scan phone audio');
+      }
+    } finally {
+      setScanning(false);
+    }
+  }, []);
+
   // Reload every time the tab is focused so new YouTube downloads appear immediately
   useFocusEffect(useCallback(() => { load(); }, [load]));
+
+  // Merge downloaded + scanned (downloaded first), de-dupe by url
+  const seen = new Set();
+  const songs = [];
+  for (const s of [...downloaded, ...scanned]) {
+    if (seen.has(s.url)) continue;
+    seen.add(s.url);
+    songs.push(s);
+  }
 
   const q = query.trim().toLowerCase();
   const filtered = q
@@ -75,6 +114,16 @@ export default function MyMusic() {
         </TouchableOpacity>
       </View>
 
+      <View style={styles.scanRow}>
+        <TouchableOpacity style={styles.scanBtn} onPress={handleScan} disabled={scanning}>
+          {scanning
+            ? <ActivityIndicator size="small" color={theme.textPrimary} />
+            : <Ionicons name="phone-portrait-outline" size={14} color={theme.textPrimary} />
+          }
+          <Text style={styles.scanBtnText}>{scanning ? 'Scanning...' : 'Scan Phone'}</Text>
+        </TouchableOpacity>
+      </View>
+
       <Text style={styles.count}>
         {q ? `${filtered.length} of ${songs.length} songs` : `${songs.length} song${songs.length !== 1 ? 's' : ''}`}
       </Text>
@@ -96,6 +145,9 @@ export default function MyMusic() {
                 <Text style={[styles.itemTitle, active && styles.itemTitleActive]} numberOfLines={1}>{item.title}</Text>
                 <Text style={styles.itemArtist} numberOfLines={1}>{item.artist || 'PlayFool'}</Text>
               </View>
+              <TouchableOpacity onPress={() => setAddToPlaylistSong(item)} style={styles.trashBtn}>
+                <Ionicons name="add-circle-outline" size={18} color={theme.textMuted} />
+              </TouchableOpacity>
               <TouchableOpacity onPress={() => confirmDelete(item)} style={styles.trashBtn}>
                 <Ionicons name="trash-outline" size={18} color={theme.red} />
               </TouchableOpacity>
@@ -111,6 +163,12 @@ export default function MyMusic() {
             </View>
           )
         }
+      />
+
+      <AddToPlaylistModal
+        open={!!addToPlaylistSong}
+        song={addToPlaylistSong}
+        onClose={() => setAddToPlaylistSong(null)}
       />
     </View>
   );
@@ -135,6 +193,9 @@ const styles = StyleSheet.create({
   itemTitleActive: { color: theme.green },
   itemArtist: { color: theme.textSecondary, fontSize: 12 },
   trashBtn: { padding: 6 },
+  scanRow: { marginBottom: 8 },
+  scanBtn: { flexDirection: 'row', alignItems: 'center', alignSelf: 'flex-start', gap: 6, backgroundColor: theme.bgSurface, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 16 },
+  scanBtnText: { color: theme.textPrimary, fontSize: 12, fontWeight: '600' },
   empty: { alignItems: 'center', paddingVertical: 60 },
   emptyText: { color: theme.textPrimary, marginTop: 12, fontSize: 15 },
   emptyHint: { color: theme.textMuted, fontSize: 12, marginTop: 6, paddingHorizontal: 32, textAlign: 'center' },

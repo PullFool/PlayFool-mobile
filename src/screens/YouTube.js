@@ -1,10 +1,13 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, Image, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { theme } from '../utils/theme';
 import { searchMusic, getAudioStreamUrl, downloadAudio } from '../utils/yt';
 import { usePlayer } from '../context/PlayerContext';
 import { reportError } from '../utils/errorReporter';
+
+const HISTORY_KEY = 'playfool_mobile_search_history';
 
 export default function YouTube() {
   const { playSong } = usePlayer();
@@ -13,17 +16,42 @@ export default function YouTube() {
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState('');
   const [downloadState, setDownloadState] = useState({}); // { [videoId]: 'downloading' | percent | 'done' }
+  const [history, setHistory] = useState([]);
+  const [showHistory, setShowHistory] = useState(false);
 
-  const search = async () => {
-    if (!query.trim()) return;
+  // Load search history on mount
+  useEffect(() => {
+    AsyncStorage.getItem(HISTORY_KEY).then((raw) => {
+      if (raw) try { setHistory(JSON.parse(raw)); } catch (e) {}
+    });
+  }, []);
+
+  const saveHistory = async (term) => {
+    const next = [term, ...history.filter((h) => h !== term)].slice(0, 10);
+    setHistory(next);
+    try { await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(next)); } catch (e) {}
+  };
+
+  const removeHistoryItem = async (term) => {
+    const next = history.filter((h) => h !== term);
+    setHistory(next);
+    try { await AsyncStorage.setItem(HISTORY_KEY, JSON.stringify(next)); } catch (e) {}
+  };
+
+  const runSearch = async (text) => {
+    const term = (text || query).trim();
+    if (!term) return;
+    setQuery(term);
+    setShowHistory(false);
     setSearching(true);
     setError('');
     setDownloadState({});
+    saveHistory(term);
     try {
-      const data = await searchMusic(query.trim(), 30);
+      const data = await searchMusic(term, 30);
       setResults(data);
     } catch (e) {
-      reportError('search', e, { query: query.trim() });
+      reportError('search', e, { query: term });
       setError(e.message || 'Search failed.');
       setResults([]);
     } finally {
@@ -68,16 +96,35 @@ export default function YouTube() {
       <Text style={styles.heading}>YouTube</Text>
 
       <View style={styles.searchRow}>
-        <TextInput
-          style={styles.search}
-          placeholder="Search music..."
-          placeholderTextColor={theme.textMuted}
-          value={query}
-          onChangeText={setQuery}
-          onSubmitEditing={search}
-          returnKeyType="search"
-        />
-        <TouchableOpacity style={styles.searchBtn} onPress={search} disabled={searching}>
+        <View style={styles.searchInputWrap}>
+          <TextInput
+            style={styles.search}
+            placeholder="Search music..."
+            placeholderTextColor={theme.textMuted}
+            value={query}
+            onChangeText={setQuery}
+            onSubmitEditing={() => runSearch()}
+            onFocus={() => { if (!query && history.length > 0) setShowHistory(true); }}
+            onBlur={() => setTimeout(() => setShowHistory(false), 150)}
+            returnKeyType="search"
+          />
+          {showHistory && history.length > 0 && (
+            <View style={styles.historyDropdown}>
+              {history.map((h) => (
+                <View key={h} style={styles.historyItem}>
+                  <TouchableOpacity style={styles.historyText} onPress={() => runSearch(h)}>
+                    <Ionicons name="time-outline" size={14} color={theme.textMuted} />
+                    <Text style={styles.historyLabel} numberOfLines={1}>{h}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => removeHistoryItem(h)} style={styles.historyRemove}>
+                    <Ionicons name="close" size={14} color={theme.textMuted} />
+                  </TouchableOpacity>
+                </View>
+              ))}
+            </View>
+          )}
+        </View>
+        <TouchableOpacity style={styles.searchBtn} onPress={() => runSearch()} disabled={searching}>
           {searching
             ? <ActivityIndicator size="small" color="#000" />
             : <Ionicons name="search" size={18} color="#000" />
@@ -112,11 +159,18 @@ export default function YouTube() {
               <TouchableOpacity
                 onPress={() => startDownload(item)}
                 disabled={downloading || done}
-                style={[styles.dlBtn, done && styles.dlBtnDone]}
+                style={[styles.dlBtn, done && styles.dlBtnDone, downloading && styles.dlBtnBusy]}
               >
-                <Text style={styles.dlBtnText}>
-                  {downloading ? `${state}%` : done ? '✓' : 'MP3'}
-                </Text>
+                {downloading ? (
+                  <Text style={styles.dlBtnText}>{state}%</Text>
+                ) : done ? (
+                  <View style={styles.dlBtnDoneInner}>
+                    <Ionicons name="checkmark-circle" size={14} color="#000" />
+                    <Text style={styles.dlBtnText}>Done</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.dlBtnText}>MP3</Text>
+                )}
               </TouchableOpacity>
             </View>
           );
@@ -137,9 +191,21 @@ export default function YouTube() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.bgPrimary, padding: 16 },
   heading: { color: theme.textPrimary, fontSize: 24, fontWeight: '700', marginBottom: 16 },
-  searchRow: { flexDirection: 'row', gap: 8, marginBottom: 12 },
-  search: { flex: 1, backgroundColor: theme.bgSurface, color: theme.textPrimary, borderRadius: 8, paddingHorizontal: 12, height: 40, fontSize: 14 },
+  searchRow: { flexDirection: 'row', gap: 8, marginBottom: 12, position: 'relative' },
+  searchInputWrap: { flex: 1, position: 'relative' },
+  search: { backgroundColor: theme.bgSurface, color: theme.textPrimary, borderRadius: 8, paddingHorizontal: 12, height: 40, fontSize: 14 },
   searchBtn: { backgroundColor: theme.green, width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center' },
+  historyDropdown: {
+    position: 'absolute', top: 44, left: 0, right: 0,
+    backgroundColor: theme.bgSurface, borderRadius: 8,
+    borderWidth: 1, borderColor: theme.border,
+    zIndex: 100, elevation: 8,
+    maxHeight: 240,
+  },
+  historyItem: { flexDirection: 'row', alignItems: 'center', padding: 10, borderBottomWidth: 1, borderBottomColor: theme.bgPrimary },
+  historyText: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  historyLabel: { color: theme.textSecondary, fontSize: 13, flex: 1 },
+  historyRemove: { padding: 4 },
   error: { color: '#ff6b6b', fontSize: 13, marginBottom: 8 },
   row: { flexDirection: 'row', gap: 10, paddingVertical: 8, alignItems: 'center' },
   thumbWrap: { width: 60, height: 60, borderRadius: 6, overflow: 'hidden', backgroundColor: theme.bgSurface, alignItems: 'center', justifyContent: 'center', position: 'relative' },
@@ -148,8 +214,10 @@ const styles = StyleSheet.create({
   info: { flex: 1, minWidth: 0 },
   title: { color: theme.textPrimary, fontSize: 13, fontWeight: '500' },
   meta: { color: theme.textSecondary, fontSize: 11, marginTop: 2 },
-  dlBtn: { backgroundColor: theme.green, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 14, minWidth: 60, alignItems: 'center' },
-  dlBtnDone: { backgroundColor: theme.green },
+  dlBtn: { backgroundColor: theme.green, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 14, minWidth: 70, alignItems: 'center' },
+  dlBtnBusy: { opacity: 0.85 },
+  dlBtnDone: { backgroundColor: theme.green, opacity: 1 },
+  dlBtnDoneInner: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   dlBtnText: { color: '#000', fontSize: 12, fontWeight: '700' },
   empty: { alignItems: 'center', paddingVertical: 60 },
   emptyText: { color: theme.textMuted, marginTop: 12 },

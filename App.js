@@ -9,6 +9,7 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { PlayerProvider } from './src/context/PlayerContext';
 import Player from './src/components/Player';
 import { installErrorReporter } from './src/utils/errorReporter';
+import { ThemeProvider } from './src/utils/theme';
 
 installErrorReporter();
 import MyMusic from './src/screens/MyMusic';
@@ -53,22 +54,24 @@ const screenOptions = ({ route }) => ({
 export default function App() {
   return (
     <SafeAreaProvider>
-      <PlayerProvider>
-        <SafeAreaView style={styles.root} edges={['top']}>
-          <NavigationContainer theme={navTheme}>
-            <View style={{ flex: 1 }}>
-              <Tab.Navigator screenOptions={screenOptions}>
-                <Tab.Screen name="My Music" component={MyMusic} />
-                <Tab.Screen name="YouTube" component={YouTube} />
-                <Tab.Screen name="Playlists" component={Playlists} />
-                <Tab.Screen name="Settings" component={Settings} />
-              </Tab.Navigator>
-              <Player />
-            </View>
-          </NavigationContainer>
-        </SafeAreaView>
-        <StatusBar style="light" backgroundColor={theme.bgPrimary} />
-      </PlayerProvider>
+      <ThemeProvider>
+        <PlayerProvider>
+          <SafeAreaView style={styles.root} edges={['top']}>
+            <NavigationContainer theme={navTheme}>
+              <View style={{ flex: 1 }}>
+                <Tab.Navigator screenOptions={screenOptions}>
+                  <Tab.Screen name="My Music" component={MyMusic} />
+                  <Tab.Screen name="YouTube" component={YouTube} />
+                  <Tab.Screen name="Playlists" component={Playlists} />
+                  <Tab.Screen name="Settings" component={Settings} />
+                </Tab.Navigator>
+                <Player />
+              </View>
+            </NavigationContainer>
+          </SafeAreaView>
+          <StatusBar style="light" backgroundColor={theme.bgPrimary} />
+        </PlayerProvider>
+      </ThemeProvider>
     </SafeAreaProvider>
   );
 }
