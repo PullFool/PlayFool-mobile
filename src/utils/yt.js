@@ -1,177 +1,119 @@
-// Minimal YouTube client built on the public Innertube API + fetch.
-// Designed for React Native — no Node-only modules, no native deps.
+// YouTube client backed by Piped — open-source YouTube proxy that handles PoToken
+// (YouTube's anti-bot system) on its servers. We're a thin client over fetch.
+// https://github.com/TeamPiped/Piped
 import * as FileSystem from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
 
-// Innertube clients. These constants are baked into YouTube.com itself and are public knowledge.
-const WEB_CLIENT = {
-  apiKey: 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
-  clientName: 'WEB',
-  clientNameId: '1',
-  clientVersion: '2.20241010.00.00',
-  userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
-};
+// Public Piped instances to try in order. If one is down or rate-limited, fall through.
+// List curated from https://piped-instances.kavin.rocks/ in 2025.
+const PIPED_INSTANCES = [
+  'https://pipedapi.kavin.rocks',
+  'https://pipedapi-libre.kavin.rocks',
+  'https://piped-api.privacy.com.de',
+  'https://pipedapi.adminforge.de',
+  'https://pipedapi.smnz.de',
+  'https://api-piped.mha.fi',
+  'https://pipedapi.darkness.services',
+];
 
-const ANDROID_CLIENT = {
-  apiKey: 'AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w',
-  clientName: 'ANDROID',
-  clientNameId: '3',
-  clientVersion: '19.29.37',
-  androidSdkVersion: 34,
-  userAgent: 'com.google.android.youtube/19.29.37 (Linux; U; Android 14) gzip',
-};
-
-// IOS client — used to be most reliable, lately failing with "Precondition check failed"
-const IOS_CLIENT = {
-  apiKey: 'AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc',
-  clientName: 'IOS',
-  clientNameId: '5',
-  clientVersion: '19.29.1',
-  deviceModel: 'iPhone16,2',
-  userAgent: 'com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)',
-};
-
-// ANDROID_VR client — currently the most reliable for player.
-// YouTube doesn't enforce anti-bot precondition checks on this surface yet.
-const ANDROID_VR_CLIENT = {
-  apiKey: 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
-  clientName: 'ANDROID_VR',
-  clientNameId: '28',
-  clientVersion: '1.60.19',
-  androidSdkVersion: 32,
-  userAgent: 'com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip',
-};
-
-// TVHTML5_SIMPLY_EMBEDDED_PLAYER — embed player surface, works for most public videos.
-const TV_EMBED_CLIENT = {
-  apiKey: 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
-  clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
-  clientNameId: '85',
-  clientVersion: '2.0',
-  userAgent: 'Mozilla/5.0 (PlayStation; PlayStation 4/12.00) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15',
-};
-
-function buildContext(client) {
-  const ctx = {
-    client: {
-      clientName: client.clientName,
-      clientVersion: client.clientVersion,
-      hl: 'en',
-      gl: 'US',
-    },
-  };
-  if (client.androidSdkVersion) ctx.client.androidSdkVersion = client.androidSdkVersion;
-  if (client.deviceModel) ctx.client.deviceModel = client.deviceModel;
-  if (client.userAgent) ctx.client.userAgent = client.userAgent;
-  return ctx;
-}
-
-async function innertube(endpoint, body, client = WEB_CLIENT) {
-  const res = await fetch(
-    `https://www.youtube.com/youtubei/v1/${endpoint}?key=${client.apiKey}&prettyPrint=false`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-YouTube-Client-Name': client.clientNameId,
-        'X-YouTube-Client-Version': client.clientVersion,
-        'User-Agent': client.userAgent,
-        Origin: 'https://www.youtube.com',
-      },
-      body: JSON.stringify({ context: buildContext(client), ...body }),
-    }
-  );
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`YouTube ${endpoint} ${res.status}: ${text.slice(0, 200)}`);
-  }
-  return res.json();
-}
-
-// Walk an arbitrary object tree and collect every videoRenderer it finds.
-function collectVideos(node, results = []) {
-  if (!node || results.length >= 100) return results;
-  if (Array.isArray(node)) {
-    for (const item of node) collectVideos(item, results);
-    return results;
-  }
-  if (typeof node === 'object') {
-    if (node.videoRenderer) {
-      const v = node.videoRenderer;
-      const id = v.videoId;
-      const title = v.title?.runs?.[0]?.text || v.title?.simpleText || '';
-      const channel = v.ownerText?.runs?.[0]?.text ||
-                      v.longBylineText?.runs?.[0]?.text ||
-                      v.shortBylineText?.runs?.[0]?.text || 'YouTube';
-      const duration = v.lengthText?.simpleText || '';
-      const thumbnail = v.thumbnail?.thumbnails?.slice(-1)?.[0]?.url || null;
-      if (id) {
-        results.push({
-          id,
-          title,
-          channel,
-          duration,
-          thumbnail,
-          url: `https://www.youtube.com/watch?v=${id}`,
-        });
-      }
-    }
-    for (const key of Object.keys(node)) collectVideos(node[key], results);
-  }
-  return results;
-}
-
-export async function searchMusic(query, limit = 30) {
-  const data = await innertube('search', { query });
-  const all = collectVideos(data);
-  // De-dupe by id (search results sometimes repeat in shelves)
-  const seen = new Set();
-  const unique = [];
-  for (const v of all) {
-    if (seen.has(v.id)) continue;
-    seen.add(v.id);
-    unique.push(v);
-    if (unique.length >= limit) break;
-  }
-  return unique;
-}
-
-// Pick the best audio-only format from a player response.
-function pickAudioFormat(playerResp) {
-  const formats =
-    playerResp?.streamingData?.adaptiveFormats || playerResp?.streamingData?.formats || [];
-  // Prefer pure audio formats (mimeType starts with 'audio/'), then highest bitrate.
-  const audio = formats
-    .filter((f) => f.mimeType && f.mimeType.startsWith('audio/'))
-    .filter((f) => f.url) // skip formats that need signature deciphering
-    .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
-  if (audio.length > 0) return audio[0];
-  // Fallback: any format with a direct url
-  return formats.find((f) => f.url) || null;
-}
-
-export async function getAudioStreamUrl(videoId) {
-  // YouTube tightens its bot checks on different client surfaces over time.
-  // Walk through the most reliable clients until one returns a usable url.
-  const body = { videoId, contentCheckOk: true, racyCheckOk: true };
-  const clients = [ANDROID_VR_CLIENT, TV_EMBED_CLIENT, IOS_CLIENT, ANDROID_CLIENT];
+async function pipedFetch(path) {
   let lastError;
-  for (const client of clients) {
+  for (const base of PIPED_INSTANCES) {
     try {
-      const data = await innertube('player', body, client);
-      const fmt = pickAudioFormat(data);
-      if (fmt?.url) return fmt.url;
-      lastError = new Error(`No playable audio in ${client.clientName} response`);
+      const res = await fetch(base + path, {
+        headers: { Accept: 'application/json' },
+      });
+      if (!res.ok) {
+        lastError = new Error(`${base} returned ${res.status}`);
+        continue;
+      }
+      const data = await res.json();
+      return data;
     } catch (e) {
       lastError = e;
     }
   }
-  throw lastError || new Error('No playable audio stream found');
+  throw lastError || new Error('All Piped instances failed');
 }
 
-const sanitize = (name) => (name || 'audio').replace(/[<>:"/\\|?*]+/g, '').slice(0, 120);
+const fmtDuration = (seconds) => {
+  if (!seconds || seconds < 0) return '';
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${String(s).padStart(2, '0')}`;
+};
 
-// Download audio to phone's PlayFool folder (app-private storage).
+function videoIdFromPipedItem(item) {
+  // Piped uses url like "/watch?v=DcO_rKzlmt4" or full youtube urls
+  if (!item?.url) return null;
+  const match = item.url.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
+  return match ? match[1] : null;
+}
+
+export async function searchMusic(query, limit = 30) {
+  // filter=music_songs gets cleaner audio results, falls through to videos otherwise
+  const data = await pipedFetch(`/search?q=${encodeURIComponent(query)}&filter=music_songs`);
+  const items = (data?.items || []).filter((it) => it.type === 'stream' || !it.type);
+  const mapped = [];
+  const seen = new Set();
+  for (const it of items) {
+    const id = videoIdFromPipedItem(it);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    mapped.push({
+      id,
+      title: it.title || '',
+      channel: it.uploaderName || it.uploader || 'YouTube',
+      duration: fmtDuration(it.duration),
+      thumbnail: it.thumbnail || null,
+      url: `https://www.youtube.com/watch?v=${id}`,
+    });
+    if (mapped.length >= limit) break;
+  }
+  // If music_songs returned almost nothing, retry with a broader search
+  if (mapped.length < 5) {
+    const data2 = await pipedFetch(`/search?q=${encodeURIComponent(query)}&filter=videos`);
+    const items2 = (data2?.items || []).filter((it) => it.type === 'stream' || !it.type);
+    for (const it of items2) {
+      const id = videoIdFromPipedItem(it);
+      if (!id || seen.has(id)) continue;
+      seen.add(id);
+      mapped.push({
+        id,
+        title: it.title || '',
+        channel: it.uploaderName || it.uploader || 'YouTube',
+        duration: fmtDuration(it.duration),
+        thumbnail: it.thumbnail || null,
+        url: `https://www.youtube.com/watch?v=${id}`,
+      });
+      if (mapped.length >= limit) break;
+    }
+  }
+  return mapped;
+}
+
+function pickBestAudio(streams) {
+  if (!Array.isArray(streams) || !streams.length) return null;
+  // Prefer m4a (mp4 audio) for best Android compatibility, then by bitrate.
+  const sorted = [...streams].sort((a, b) => {
+    const aMp4 = (a.mimeType || '').includes('mp4') ? 1 : 0;
+    const bMp4 = (b.mimeType || '').includes('mp4') ? 1 : 0;
+    if (aMp4 !== bMp4) return bMp4 - aMp4;
+    return (b.bitrate || 0) - (a.bitrate || 0);
+  });
+  return sorted[0];
+}
+
+export async function getAudioStreamUrl(videoId) {
+  const data = await pipedFetch(`/streams/${videoId}`);
+  const fmt = pickBestAudio(data?.audioStreams);
+  if (!fmt?.url) throw new Error('No playable audio stream found');
+  return fmt.url;
+}
+
+const sanitize = (name) =>
+  (name || 'audio').replace(/[<>:"/\\|?*]+/g, '').slice(0, 120);
+
 export async function downloadAudio(video, onProgress) {
   const url = await getAudioStreamUrl(video.id);
   const dir = FileSystem.documentDirectory + 'PlayFool/';
@@ -218,8 +160,6 @@ export async function deleteLocalAudio(uri) {
   await FileSystem.deleteAsync(uri, { idempotent: true });
 }
 
-// Ask for permission and scan every audio file on the phone via MediaLibrary.
-// Returns songs in the same shape as listLocalAudio() so they merge cleanly.
 export async function scanPhoneAudio({ onProgress } = {}) {
   const perm = await MediaLibrary.requestPermissionsAsync();
   if (!perm.granted) {
@@ -240,7 +180,6 @@ export async function scanPhoneAudio({ onProgress } = {}) {
       after: endCursor,
     });
     for (const asset of page.assets) {
-      // Skip ringtones / notification sounds (very short)
       if ((asset.duration || 0) < 10) continue;
       all.push({
         id: 'scan-' + asset.id,
