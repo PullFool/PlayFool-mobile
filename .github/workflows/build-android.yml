@@ -37,6 +37,9 @@ jobs:
       - name: Inject Discord webhook into env
         run: echo "EXPO_PUBLIC_DISCORD_WEBHOOK=${{ secrets.DISCORD_WEBHOOK_MOBILE }}" >> $GITHUB_ENV
 
+      - name: Make gradlew executable
+        run: chmod +x android/gradlew
+
       - name: Build release APK
         working-directory: android
         run: ./gradlew assembleRelease --no-daemon
