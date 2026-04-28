@@ -21,6 +21,17 @@ const ANDROID_CLIENT = {
   userAgent: 'com.google.android.youtube/19.29.37 (Linux; U; Android 14) gzip',
 };
 
+// IOS client — most reliable for getting plain (non-deciphered) audio URLs
+// without YouTube's aggressive bot checks.
+const IOS_CLIENT = {
+  apiKey: 'AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc',
+  clientName: 'IOS',
+  clientNameId: '5',
+  clientVersion: '19.29.1',
+  deviceModel: 'iPhone16,2',
+  userAgent: 'com.google.ios.youtube/19.29.1 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X;)',
+};
+
 function buildContext(client) {
   const ctx = {
     client: {
@@ -31,6 +42,7 @@ function buildContext(client) {
     },
   };
   if (client.androidSdkVersion) ctx.client.androidSdkVersion = client.androidSdkVersion;
+  if (client.deviceModel) ctx.client.deviceModel = client.deviceModel;
   if (client.userAgent) ctx.client.userAgent = client.userAgent;
   return ctx;
 }
@@ -120,12 +132,15 @@ function pickAudioFormat(playerResp) {
 }
 
 export async function getAudioStreamUrl(videoId) {
-  // ANDROID client returns non-deciphered URLs we can use directly.
-  const data = await innertube(
-    'player',
-    { videoId, contentCheckOk: true, racyCheckOk: true },
-    ANDROID_CLIENT
-  );
+  // Try IOS client first (most reliable, returns un-deciphered URLs).
+  // Fall back to ANDROID if IOS rejects.
+  const body = { videoId, contentCheckOk: true, racyCheckOk: true };
+  let data;
+  try {
+    data = await innertube('player', body, IOS_CLIENT);
+  } catch (e) {
+    data = await innertube('player', body, ANDROID_CLIENT);
+  }
   const fmt = pickAudioFormat(data);
   if (!fmt?.url) throw new Error('No playable audio stream found');
   return fmt.url;
