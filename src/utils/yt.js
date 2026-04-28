@@ -34,15 +34,26 @@ const COBALT_INSTANCES = [
   'https://cobalt-api.kwiatekmiki.com',
 ];
 
-async function tryFetch(bases, pathOrFactory, init = {}) {
+// fetch with a timeout — RN's default fetch never aborts on a hung instance.
+async function fetchWithTimeout(url, init = {}, timeoutMs = 7000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function tryFetch(bases, pathOrFactory, init = {}, timeoutMs = 7000) {
   let lastError;
   for (const base of bases) {
     try {
       const url = typeof pathOrFactory === 'function' ? pathOrFactory(base) : base + pathOrFactory;
-      const res = await fetch(url, {
+      const res = await fetchWithTimeout(url, {
         ...init,
         headers: { Accept: 'application/json', ...(init.headers || {}) },
-      });
+      }, timeoutMs);
       if (!res.ok) {
         lastError = new Error(`${base} returned ${res.status}`);
         continue;
@@ -143,11 +154,10 @@ async function getAudioFromPiped(videoId) {
 }
 
 async function getAudioFromCobalt(videoId) {
-  // Cobalt POST /api/json with the video URL
   let lastError;
   for (const base of COBALT_INSTANCES) {
     try {
-      const res = await fetch(`${base}/api/json`, {
+      const res = await fetchWithTimeout(`${base}/api/json`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({
@@ -155,7 +165,7 @@ async function getAudioFromCobalt(videoId) {
           isAudioOnly: true,
           audioFormat: 'best',
         }),
-      });
+      }, 10000);
       if (!res.ok) { lastError = new Error(`${base} ${res.status}`); continue; }
       const data = await res.json();
       if (data?.url) return data.url;
