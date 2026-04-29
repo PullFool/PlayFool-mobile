@@ -86,8 +86,8 @@ export default function YouTube() {
       setDownloadState(s => ({ ...s, [video.id]: 'done' }));
     } catch (e) {
       reportError('download', e, { videoId: video.id, title: video.title });
-      setError('Download failed: ' + e.message);
-      setDownloadState(s => { const n = { ...s }; delete n[video.id]; return n; });
+      setError('Download failed: ' + (e.message || '').split('\n')[0]);
+      setDownloadState(s => ({ ...s, [video.id]: 'error' }));
     }
   };
 
@@ -141,6 +141,7 @@ export default function YouTube() {
           const state = downloadState[item.id];
           const downloading = typeof state === 'number';
           const done = state === 'done';
+          const failed = state === 'error';
           return (
             <View style={styles.row}>
               <TouchableOpacity onPress={() => preview(item)} style={styles.thumbWrap}>
@@ -157,9 +158,22 @@ export default function YouTube() {
                 <Text style={styles.meta}>{item.channel} · {item.duration}</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                onPress={() => startDownload(item)}
+                onPress={() => {
+                  if (failed) {
+                    // Reset state and retry the download
+                    setDownloadState(s => { const n = { ...s }; delete n[item.id]; return n; });
+                    startDownload(item);
+                  } else {
+                    startDownload(item);
+                  }
+                }}
                 disabled={downloading || done}
-                style={[styles.dlBtn, done && styles.dlBtnDone, downloading && styles.dlBtnBusy]}
+                style={[
+                  styles.dlBtn,
+                  done && styles.dlBtnDone,
+                  downloading && styles.dlBtnBusy,
+                  failed && styles.dlBtnFailed,
+                ]}
               >
                 {downloading ? (
                   <Text style={styles.dlBtnText}>{state}%</Text>
@@ -167,6 +181,11 @@ export default function YouTube() {
                   <View style={styles.dlBtnDoneInner}>
                     <Ionicons name="checkmark-circle" size={14} color="#000" />
                     <Text style={styles.dlBtnText}>Done</Text>
+                  </View>
+                ) : failed ? (
+                  <View style={styles.dlBtnDoneInner}>
+                    <Ionicons name="refresh" size={14} color="#fff" />
+                    <Text style={[styles.dlBtnText, { color: '#fff' }]}>Retry</Text>
                   </View>
                 ) : (
                   <Text style={styles.dlBtnText}>MP3</Text>
@@ -217,6 +236,7 @@ const styles = StyleSheet.create({
   dlBtn: { backgroundColor: theme.green, paddingHorizontal: 14, paddingVertical: 8, borderRadius: 14, minWidth: 70, alignItems: 'center' },
   dlBtnBusy: { opacity: 0.85 },
   dlBtnDone: { backgroundColor: theme.green, opacity: 1 },
+  dlBtnFailed: { backgroundColor: '#ff6b6b' },
   dlBtnDoneInner: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   dlBtnText: { color: '#000', fontSize: 12, fontWeight: '700' },
   empty: { alignItems: 'center', paddingVertical: 60 },

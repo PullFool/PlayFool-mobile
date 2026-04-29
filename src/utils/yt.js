@@ -200,21 +200,57 @@ async function getAudioFromCobalt(videoId) {
   return null;
 }
 
+// Try to grab a stream url through the Piped proxy by hitting
+// pipedproxy directly — works for videos that fail through the API.
+async function getAudioFromPipedProxy(videoId) {
+  // The /streams/{id} response sometimes carries a deciphered url even when
+  // its audioStreams array is empty; pull it from the embed URL too.
+  const embedHosts = [
+    'https://piped.video',
+    'https://piped.kavin.rocks',
+    'https://piped.privacy.com.de',
+  ];
+  for (const host of embedHosts) {
+    try {
+      const html = await fetchWithTimeout(`${host}/embed/${videoId}`, {}, 7000)
+        .then((r) => (r.ok ? r.text() : ''));
+      const match = html.match(/"audioStream":\s*"([^"]+\.googlevideo\.com[^"]*)"/);
+      if (match) return match[1].replace(/\\u0026/g, '&');
+    } catch (e) { /* try next */ }
+  }
+  return null;
+}
+
 export async function getAudioStreamUrl(videoId) {
-  // Tier 1: Piped — direct CDN url, fastest when available.
+  // Collect a per-tier failure summary so the user / Discord webhook know
+  // exactly which providers failed and why instead of seeing only the last error.
+  const errors = [];
+  // Tier 1: Piped API — direct CDN url, fastest when available.
   try {
     const url = await getAudioFromPiped(videoId);
     if (url) return url;
-  } catch (e) { /* fall through */ }
+    errors.push('Piped: no audio in response');
+  } catch (e) { errors.push(`Piped: ${e.message || e}`); }
   // Tier 2: Invidious — same idea as Piped, different network.
   try {
     const url = await getAudioFromInvidious(videoId);
     if (url) return url;
-  } catch (e) { /* fall through */ }
+    errors.push('Invidious: no audio in response');
+  } catch (e) { errors.push(`Invidious: ${e.message || e}`); }
   // Tier 3: Cobalt — heavier hitters that proxy the actual file.
-  const url = await getAudioFromCobalt(videoId);
-  if (!url) throw new Error('No playable audio stream found');
-  return url;
+  try {
+    const url = await getAudioFromCobalt(videoId);
+    if (url) return url;
+    errors.push('Cobalt: no audio in response');
+  } catch (e) { errors.push(`Cobalt: ${e.message || e}`); }
+  // Tier 4: Piped embed page scrape — last-ditch.
+  try {
+    const url = await getAudioFromPipedProxy(videoId);
+    if (url) return url;
+    errors.push('PipedProxy: no audio extracted');
+  } catch (e) { errors.push(`PipedProxy: ${e.message || e}`); }
+
+  throw new Error('All providers failed:\n' + errors.join('\n'));
 }
 
 const sanitize = (name) =>
