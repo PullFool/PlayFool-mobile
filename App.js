@@ -8,6 +8,7 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
 import { PlayerProvider } from './src/context/PlayerContext';
 import Player from './src/components/Player';
+import UpdateBanner from './src/components/UpdateBanner';
 import { installErrorReporter } from './src/utils/errorReporter';
 import { ThemeProvider } from './src/utils/theme';
 
@@ -57,6 +58,7 @@ export default function App() {
       <ThemeProvider>
         <PlayerProvider>
           <SafeAreaView style={styles.root} edges={['top']}>
+            <UpdateBanner />
             <NavigationContainer theme={navTheme}>
               <View style={{ flex: 1 }}>
                 <Tab.Navigator screenOptions={screenOptions}>

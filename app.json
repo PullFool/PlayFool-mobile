@@ -22,7 +22,8 @@
         "READ_EXTERNAL_STORAGE",
         "WRITE_EXTERNAL_STORAGE",
         "READ_MEDIA_AUDIO",
-        "INTERNET"
+        "INTERNET",
+        "REQUEST_INSTALL_PACKAGES"
       ]
     },
     "platforms": ["android"],
