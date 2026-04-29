@@ -26,11 +26,13 @@ const INVIDIOUS_INSTANCES = [
   'https://inv.nadeko.net',
 ];
 
-// Cobalt is the most reliable audio-URL provider — they handle PoToken on their
-// servers and support a simple POST API. Used for getAudioStreamUrl().
+// Cobalt API v10 instances — currently active in 2025.
 const COBALT_INSTANCES = [
-  'https://api.cobalt.tools',
-  'https://co.wuk.sh',
+  'https://api.dl.ovh',
+  'https://capi.oat.zone',
+  'https://co.eepy.today',
+  'https://cobalt.synzr.ru',
+  'https://cobalt-backend.canine.tools',
   'https://cobalt-api.kwiatekmiki.com',
 ];
 
@@ -153,36 +155,63 @@ async function getAudioFromPiped(videoId) {
   return fmt?.url || null;
 }
 
+async function getAudioFromInvidious(videoId) {
+  // Invidious /api/v1/videos/{id} returns adaptiveFormats[] with direct urls.
+  const data = await tryFetch(INVIDIOUS_INSTANCES, `/api/v1/videos/${videoId}`);
+  const formats = data?.adaptiveFormats || [];
+  // Audio formats have type starting with "audio/"
+  const audio = formats
+    .filter((f) => (f.type || f.mimeType || '').startsWith('audio/'))
+    .filter((f) => f.url)
+    .sort((a, b) => (parseInt(b.bitrate, 10) || 0) - (parseInt(a.bitrate, 10) || 0));
+  return audio[0]?.url || null;
+}
+
+async function cobaltRequest(base, body, version) {
+  // Cobalt v10 uses POST / with downloadMode; v7 used POST /api/json with isAudioOnly.
+  const path = version === 'v10' ? '/' : '/api/json';
+  const res = await fetchWithTimeout(base + path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify(body),
+  }, 10000);
+  if (!res.ok) throw new Error(`${base} ${res.status}`);
+  return res.json();
+}
+
 async function getAudioFromCobalt(videoId) {
+  const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
   let lastError;
   for (const base of COBALT_INSTANCES) {
-    try {
-      const res = await fetchWithTimeout(`${base}/api/json`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({
-          url: `https://www.youtube.com/watch?v=${videoId}`,
-          isAudioOnly: true,
-          audioFormat: 'best',
-        }),
-      }, 10000);
-      if (!res.ok) { lastError = new Error(`${base} ${res.status}`); continue; }
-      const data = await res.json();
-      if (data?.url) return data.url;
-      if (data?.audio) return data.audio;
-      lastError = new Error(`${base} returned no url`);
-    } catch (e) { lastError = e; }
+    // Try v10 schema first (most current), fall back to v7 schema.
+    for (const [version, body] of [
+      ['v10', { url: youtubeUrl, downloadMode: 'audio', audioFormat: 'best', filenameStyle: 'basic' }],
+      ['v7', { url: youtubeUrl, isAudioOnly: true, audioFormat: 'best' }],
+    ]) {
+      try {
+        const data = await cobaltRequest(base, body, version);
+        if (data?.status === 'error') { lastError = new Error(data.text || 'cobalt error'); continue; }
+        if (data?.url) return data.url;
+        if (data?.audio) return data.audio;
+      } catch (e) { lastError = e; }
+    }
   }
   if (lastError) throw lastError;
   return null;
 }
 
 export async function getAudioStreamUrl(videoId) {
-  // Try Piped first (direct CDN url, fastest), fall back to Cobalt.
+  // Tier 1: Piped — direct CDN url, fastest when available.
   try {
     const url = await getAudioFromPiped(videoId);
     if (url) return url;
   } catch (e) { /* fall through */ }
+  // Tier 2: Invidious — same idea as Piped, different network.
+  try {
+    const url = await getAudioFromInvidious(videoId);
+    if (url) return url;
+  } catch (e) { /* fall through */ }
+  // Tier 3: Cobalt — heavier hitters that proxy the actual file.
   const url = await getAudioFromCobalt(videoId);
   if (!url) throw new Error('No playable audio stream found');
   return url;
