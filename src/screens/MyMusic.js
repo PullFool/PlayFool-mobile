@@ -72,14 +72,30 @@ export default function MyMusic() {
     ? songs.filter(s => (s.title || '').toLowerCase().includes(q))
     : songs;
 
+  // Scanned songs come from the phone's MediaStore — we can't delete them
+  // (no permission, system-owned). Just drop them from our scan cache so they
+  // don't show in PlayFool. They stay on the phone and reappear if the user
+  // taps Scan Phone again. Downloaded songs (in our app folder) are actually
+  // deleted from disk.
   const confirmDelete = (song) => {
+    const isScanned = song.source === 'scanned';
     Alert.alert(
-      'Delete song?',
-      `"${song.title}"\n\nThis will permanently delete the file from your phone.`,
+      isScanned ? 'Remove from PlayFool?' : 'Delete song?',
+      isScanned
+        ? `"${song.title}"\n\nThis only hides the song in PlayFool. The file stays on your phone and will come back the next time you tap Scan Phone.`
+        : `"${song.title}"\n\nThis will permanently delete the file from your phone's PlayFool folder.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Delete', style: 'destructive', onPress: async () => {
+          text: isScanned ? 'Remove' : 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            if (isScanned) {
+              const next = scanned.filter((s) => s.url !== song.url);
+              setScanned(next);
+              try { await AsyncStorage.setItem(SCAN_CACHE_KEY, JSON.stringify(next)); } catch (e) {}
+              return;
+            }
             try { await deleteLocalAudio(song.url); load(); }
             catch (e) { reportError('mymusic.delete', e, { uri: song.url }); }
           },
