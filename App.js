@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { View, StyleSheet } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
@@ -8,6 +8,7 @@ import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 
 import { PlayerProvider } from './src/context/PlayerContext';
 import Player from './src/components/Player';
+import NowPlaying from './src/screens/NowPlaying';
 import UpdateBanner from './src/components/UpdateBanner';
 import { installErrorReporter } from './src/utils/errorReporter';
 import { ThemeProvider } from './src/utils/theme';
@@ -52,26 +53,36 @@ const screenOptions = ({ route }) => ({
   },
 });
 
+function AppShell() {
+  const [showNowPlaying, setShowNowPlaying] = useState(false);
+  return (
+    <>
+      <SafeAreaView style={styles.root} edges={['top']}>
+        <UpdateBanner />
+        <NavigationContainer theme={navTheme}>
+          <View style={{ flex: 1 }}>
+            <Tab.Navigator screenOptions={screenOptions}>
+              <Tab.Screen name="My Music" component={MyMusic} />
+              <Tab.Screen name="YouTube" component={YouTube} />
+              <Tab.Screen name="Playlists" component={Playlists} />
+              <Tab.Screen name="Settings" component={Settings} />
+            </Tab.Navigator>
+            <Player onExpand={() => setShowNowPlaying(true)} />
+          </View>
+        </NavigationContainer>
+      </SafeAreaView>
+      <NowPlaying visible={showNowPlaying} onClose={() => setShowNowPlaying(false)} />
+      <StatusBar style="light" backgroundColor={theme.bgPrimary} />
+    </>
+  );
+}
+
 export default function App() {
   return (
     <SafeAreaProvider>
       <ThemeProvider>
         <PlayerProvider>
-          <SafeAreaView style={styles.root} edges={['top']}>
-            <UpdateBanner />
-            <NavigationContainer theme={navTheme}>
-              <View style={{ flex: 1 }}>
-                <Tab.Navigator screenOptions={screenOptions}>
-                  <Tab.Screen name="My Music" component={MyMusic} />
-                  <Tab.Screen name="YouTube" component={YouTube} />
-                  <Tab.Screen name="Playlists" component={Playlists} />
-                  <Tab.Screen name="Settings" component={Settings} />
-                </Tab.Navigator>
-                <Player />
-              </View>
-            </NavigationContainer>
-          </SafeAreaView>
-          <StatusBar style="light" backgroundColor={theme.bgPrimary} />
+          <AppShell />
         </PlayerProvider>
       </ThemeProvider>
     </SafeAreaProvider>

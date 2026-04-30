@@ -12,7 +12,7 @@ const fmt = (s) => {
   return `${m}:${String(r).padStart(2, '0')}`;
 };
 
-export default function Player() {
+export default function Player({ onExpand }) {
   const { currentSong, isPlaying, position, duration, togglePlayPause, skipNext, skipPrev, seekTo } = usePlayer();
   const [showLyrics, setShowLyrics] = useState(false);
 
@@ -25,15 +25,17 @@ export default function Player() {
         <View style={[styles.progressFill, { width: `${progress}%` }]} />
       </View>
       <View style={styles.row}>
-        {currentSong.cover ? (
-          <Image source={{ uri: currentSong.cover }} style={styles.art} />
-        ) : (
-          <View style={styles.art}><Ionicons name="musical-notes" size={20} color={theme.textMuted} /></View>
-        )}
-        <View style={styles.info}>
-          <Text style={styles.title} numberOfLines={1}>{currentSong.title}</Text>
-          <Text style={styles.artist} numberOfLines={1}>{currentSong.artist || 'Unknown'}</Text>
-        </View>
+        <TouchableOpacity onPress={onExpand} style={styles.tappable}>
+          {currentSong.cover ? (
+            <Image source={{ uri: currentSong.cover }} style={styles.art} />
+          ) : (
+            <View style={styles.art}><Ionicons name="musical-notes" size={20} color={theme.textMuted} /></View>
+          )}
+          <View style={styles.info}>
+            <Text style={styles.title} numberOfLines={1}>{currentSong.title}</Text>
+            <Text style={styles.artist} numberOfLines={1}>{currentSong.artist || 'Unknown'}</Text>
+          </View>
+        </TouchableOpacity>
         <View style={styles.controls}>
           <TouchableOpacity onPress={skipPrev}><Ionicons name="play-skip-back" size={22} color={theme.textPrimary} /></TouchableOpacity>
           <TouchableOpacity onPress={() => seekTo(Math.max(0, position - 10))}><Ionicons name="play-back" size={20} color={theme.textPrimary} /></TouchableOpacity>
@@ -61,6 +63,7 @@ const styles = StyleSheet.create({
   progress: { height: 3, backgroundColor: theme.bgSurface, borderRadius: 2, marginBottom: 8 },
   progressFill: { height: '100%', backgroundColor: theme.green, borderRadius: 2 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  tappable: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 },
   art: { width: 40, height: 40, borderRadius: 4, backgroundColor: theme.bgSurface, alignItems: 'center', justifyContent: 'center' },
   info: { flex: 1, minWidth: 0 },
   title: { color: theme.textPrimary, fontSize: 13, fontWeight: '600' },

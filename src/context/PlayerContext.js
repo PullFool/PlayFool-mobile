@@ -123,6 +123,14 @@ export function PlayerProvider({ children }) {
     toggleRepeat: () => setRepeat((r) => (r + 1) % 3),
     addToQueue: (song) => setQueue((q) => [...q, song]),
     playNext: (song) => setQueue((q) => [song, ...q]),
+    removeFromQueue: (index) => setQueue((q) => q.filter((_, i) => i !== index)),
+    playFromQueue: (index) => {
+      setQueue((q) => {
+        const song = q[index];
+        if (song) playSong([song], 0);
+        return q.filter((_, i) => i !== index);
+      });
+    },
   };
 
   return <PlayerContext.Provider value={value}>{children}</PlayerContext.Provider>;
