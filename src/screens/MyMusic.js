@@ -96,8 +96,8 @@ export default function MyMusic() {
               try { await AsyncStorage.setItem(SCAN_CACHE_KEY, JSON.stringify(next)); } catch (e) {}
               return;
             }
-            try { await deleteLocalAudio(song.url); load(); }
-            catch (e) { reportError('mymusic.delete', e, { uri: song.url }); }
+            try { await deleteLocalAudio(song); load(); }
+            catch (e) { reportError('mymusic.delete', e, { id: song.id, source: song.source }); }
           },
         },
       ]

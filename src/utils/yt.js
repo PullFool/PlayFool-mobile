@@ -61,16 +61,19 @@ export async function getAudioStreamUrl(videoId) {
 const sanitize = (name) =>
   (name || 'audio').replace(/[<>:"/\\|?*]+/g, '').slice(0, 120);
 
-export async function downloadAudio(video, onProgress) {
-  const url = await getAudioStreamUrl(video.id);
-  const dir = FileSystem.documentDirectory + 'PlayFool/';
-  await FileSystem.makeDirectoryAsync(dir, { intermediates: true }).catch(() => {});
-  const filename = `${sanitize(video.title)}.m4a`;
-  const target = dir + filename;
+const ALBUM_NAME = 'PlayFool';
 
-  const downloadResumable = FileSystem.createDownloadResumable(
+export async function downloadAudio(video, onProgress) {
+  // 1. Download to app cache (temp location).
+  const url = await getAudioStreamUrl(video.id);
+  const cacheDir = FileSystem.cacheDirectory + 'PlayFool-dl/';
+  await FileSystem.makeDirectoryAsync(cacheDir, { intermediates: true }).catch(() => {});
+  const filename = `${sanitize(video.title)}.m4a`;
+  const tempUri = cacheDir + filename;
+
+  const dl = FileSystem.createDownloadResumable(
     url,
-    target,
+    tempUri,
     {},
     (snapshot) => {
       if (onProgress && snapshot.totalBytesExpectedToWrite > 0) {
@@ -81,30 +84,117 @@ export async function downloadAudio(video, onProgress) {
       }
     }
   );
-
-  const result = await downloadResumable.downloadAsync();
+  const result = await dl.downloadAsync();
   if (!result?.uri) throw new Error('Download failed');
-  return { uri: result.uri, filename, title: video.title };
+
+  // 2. Hand the file to the system Music library so it survives uninstall and
+  //    is visible to other music apps. Requires media-library permission.
+  const perm = await MediaLibrary.requestPermissionsAsync();
+  if (!perm.granted) {
+    // Fall back to keeping the file in app cache if the user refused.
+    return { uri: result.uri, filename, title: video.title };
+  }
+
+  const asset = await MediaLibrary.createAssetAsync(result.uri);
+  try {
+    let album = await MediaLibrary.getAlbumAsync(ALBUM_NAME);
+    if (!album) {
+      album = await MediaLibrary.createAlbumAsync(ALBUM_NAME, asset, false);
+    } else {
+      await MediaLibrary.addAssetsToAlbumAsync([asset], album, false);
+    }
+  } catch (e) {
+    // Album organization is best-effort. The file still ends up in /Music/.
+  }
+
+  // 3. Clean up the cache copy. The MediaStore now owns the file at its public
+  //    path. expo-file-system can delete from cacheDirectory we own.
+  try { await FileSystem.deleteAsync(result.uri, { idempotent: true }); } catch (e) {}
+
+  return { uri: asset.uri, assetId: asset.id, filename, title: video.title };
 }
 
+// List downloaded audio. Reads both:
+// 1. The MediaLibrary 'PlayFool' album (new public-folder downloads)
+// 2. Legacy app-private folder (for users upgrading from older versions)
 export async function listLocalAudio() {
-  const dir = FileSystem.documentDirectory + 'PlayFool/';
-  const exists = await FileSystem.getInfoAsync(dir);
-  if (!exists.exists) return [];
-  const files = await FileSystem.readDirectoryAsync(dir);
-  const audio = files.filter((f) => /\.(m4a|mp3|webm|opus|ogg)$/i.test(f));
-  return audio.map((f) => ({
-    id: 'local-' + f,
-    title: f.replace(/\.[^.]+$/, ''),
-    artist: 'PlayFool',
-    url: dir + f,
-    cover: null,
-    source: 'local',
-  }));
+  const out = [];
+
+  // New location: MediaStore PlayFool album
+  try {
+    const perm = await MediaLibrary.requestPermissionsAsync();
+    if (perm.granted) {
+      const album = await MediaLibrary.getAlbumAsync(ALBUM_NAME);
+      if (album) {
+        let endCursor;
+        let hasNextPage = true;
+        while (hasNextPage) {
+          const page = await MediaLibrary.getAssetsAsync({
+            album: album.id,
+            mediaType: MediaLibrary.MediaType.audio,
+            first: 100,
+            after: endCursor,
+          });
+          for (const asset of page.assets) {
+            out.push({
+              id: 'local-' + asset.id,
+              assetId: asset.id,
+              title: (asset.filename || '').replace(/\.[^.]+$/, '') || 'Unknown',
+              artist: 'PlayFool',
+              url: asset.uri,
+              cover: null,
+              source: 'local',
+              duration: asset.duration,
+            });
+          }
+          endCursor = page.endCursor;
+          hasNextPage = page.hasNextPage;
+        }
+      }
+    }
+  } catch (e) { /* fall through to legacy reader */ }
+
+  // Legacy: app-private documentDirectory PlayFool folder.
+  try {
+    const dir = FileSystem.documentDirectory + 'PlayFool/';
+    const exists = await FileSystem.getInfoAsync(dir);
+    if (exists.exists) {
+      const files = await FileSystem.readDirectoryAsync(dir);
+      const audio = files.filter((f) => /\.(m4a|mp3|webm|opus|ogg)$/i.test(f));
+      const seen = new Set(out.map((s) => (s.title || '').toLowerCase()));
+      for (const f of audio) {
+        const title = f.replace(/\.[^.]+$/, '');
+        if (seen.has(title.toLowerCase())) continue;
+        out.push({
+          id: 'legacy-' + f,
+          title,
+          artist: 'PlayFool',
+          url: dir + f,
+          cover: null,
+          source: 'local-legacy',
+        });
+      }
+    }
+  } catch (e) {}
+
+  return out;
 }
 
-export async function deleteLocalAudio(uri) {
-  await FileSystem.deleteAsync(uri, { idempotent: true });
+// Delete a downloaded song. MediaLibrary assets need MediaLibrary.deleteAssetsAsync;
+// legacy app-private files use FileSystem.deleteAsync.
+export async function deleteLocalAudio(song) {
+  // Backwards-compat: callers used to pass a uri string. Accept either.
+  if (typeof song === 'string') {
+    return FileSystem.deleteAsync(song, { idempotent: true });
+  }
+  if (song?.assetId) {
+    await MediaLibrary.deleteAssetsAsync([song.assetId]);
+    return;
+  }
+  if (song?.url) {
+    return FileSystem.deleteAsync(song.url, { idempotent: true });
+  }
+  throw new Error('Nothing to delete');
 }
 
 export async function scanPhoneAudio({ onProgress } = {}) {
