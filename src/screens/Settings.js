@@ -2,41 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Application from 'expo-application';
 import { theme, useTheme } from '../utils/theme';
 import SupportModal from '../components/SupportModal';
-import { reportError } from '../utils/errorReporter';
+import { recordHeart, HEARTED_KEY as HEART_KEY } from '../utils/hearts';
 
 const KOFI_URL = 'https://ko-fi.com/PullFool';
-const HEARTS_API = 'https://adrianborboran.up.railway.app/api/hearts';
-const HEART_KEY = 'playfool_mobile_hearted';
-const INSTALL_KEY = 'playfool_mobile_install_id';
-
-async function getInstallId() {
-  let id = await AsyncStorage.getItem(INSTALL_KEY);
-  if (!id) {
-    id = `m-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    try { await AsyncStorage.setItem(INSTALL_KEY, id); } catch (e) {}
-  }
-  return id;
-}
-
-async function recordHeart() {
-  try {
-    const install_id = await getInstallId();
-    await fetch(HEARTS_API, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({
-        project: 'playfool-mobile',
-        install_id,
-        app_version: '1.0.0',
-        platform: 'android',
-      }),
-    });
-  } catch (e) {
-    reportError('hearts.record', e);
-  }
-}
 
 export default function Settings() {
   const { mode, toggle } = useTheme();
@@ -50,9 +21,9 @@ export default function Settings() {
   const onHeartTap = () => setShowSupport(true);
 
   const handleLike = async () => {
-    await recordHeart();
+    const version = Application.nativeApplicationVersion || 'dev';
+    await recordHeart(version); // also writes HEART_KEY
     setHasHearted(true);
-    try { await AsyncStorage.setItem(HEART_KEY, '1'); } catch (e) {}
   };
 
   return (
