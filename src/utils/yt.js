@@ -1,43 +1,12 @@
-// YouTube client backed by Piped — open-source YouTube proxy that handles PoToken
-// (YouTube's anti-bot system) on its servers. We're a thin client over fetch.
-// https://github.com/TeamPiped/Piped
+// PlayFool's hosted yt-dlp/ffmpeg backend. Single source of truth — no more
+// chasing public Piped/Invidious/Cobalt instances that get blocked weekly.
 import * as FileSystem from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
 
-// Public Piped instances. Many have been shut down or rate-limited as YouTube
-// cracks down — keep this list short and current.
-const PIPED_INSTANCES = [
-  'https://pipedapi.kavin.rocks',
-  'https://piped-api.privacy.com.de',
-  'https://pipedapi.adminforge.de',
-  'https://pipedapi.smnz.de',
-  'https://pipedapi.reallyaweso.me',
-  'https://pipedapi.r4fo.com',
-  'https://pipedapi.ducks.party',
-];
+const API_BASE = 'https://adrianborboran.up.railway.app/api/yt';
+const DEFAULT_TIMEOUT = 12000; // generous so a Railway cold-start can finish
 
-// Invidious is a parallel project with the same idea. We use these as a
-// search-only fallback if every Piped instance is unreachable.
-const INVIDIOUS_INSTANCES = [
-  'https://invidious.f5.si',
-  'https://yewtu.be',
-  'https://invidious.private.coffee',
-  'https://iv.melmac.space',
-  'https://inv.nadeko.net',
-];
-
-// Cobalt API v10 instances — currently active in 2025.
-const COBALT_INSTANCES = [
-  'https://api.dl.ovh',
-  'https://capi.oat.zone',
-  'https://co.eepy.today',
-  'https://cobalt.synzr.ru',
-  'https://cobalt-backend.canine.tools',
-  'https://cobalt-api.kwiatekmiki.com',
-];
-
-// fetch with a timeout — RN's default fetch never aborts on a hung instance.
-async function fetchWithTimeout(url, init = {}, timeoutMs = 7000) {
+async function fetchWithTimeout(url, init = {}, timeoutMs = DEFAULT_TIMEOUT) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -47,28 +16,16 @@ async function fetchWithTimeout(url, init = {}, timeoutMs = 7000) {
   }
 }
 
-async function tryFetch(bases, pathOrFactory, init = {}, timeoutMs = 7000) {
-  let lastError;
-  for (const base of bases) {
-    try {
-      const url = typeof pathOrFactory === 'function' ? pathOrFactory(base) : base + pathOrFactory;
-      const res = await fetchWithTimeout(url, {
-        ...init,
-        headers: { Accept: 'application/json', ...(init.headers || {}) },
-      }, timeoutMs);
-      if (!res.ok) {
-        lastError = new Error(`${base} returned ${res.status}`);
-        continue;
-      }
-      return await res.json();
-    } catch (e) {
-      lastError = e;
-    }
+async function apiGet(path, timeoutMs) {
+  const res = await fetchWithTimeout(`${API_BASE}${path}`, {
+    headers: { Accept: 'application/json' },
+  }, timeoutMs);
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`PlayFool API ${res.status}: ${text.slice(0, 200)}`);
   }
-  throw lastError || new Error('All instances failed');
+  return res.json();
 }
-
-const pipedFetch = (path) => tryFetch(PIPED_INSTANCES, path);
 
 const fmtDuration = (seconds) => {
   if (!seconds || seconds < 0) return '';
@@ -77,180 +34,28 @@ const fmtDuration = (seconds) => {
   return `${m}:${String(s).padStart(2, '0')}`;
 };
 
-function videoIdFromPipedItem(item) {
-  // Piped uses url like "/watch?v=DcO_rKzlmt4" or full youtube urls
-  if (!item?.url) return null;
-  const match = item.url.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
-  return match ? match[1] : null;
-}
-
-async function searchViaPiped(query, limit) {
-  const data = await pipedFetch(`/search?q=${encodeURIComponent(query)}&filter=videos`);
-  const items = (data?.items || []).filter((it) => it.type === 'stream' || !it.type);
-  const mapped = [];
-  const seen = new Set();
-  for (const it of items) {
-    const id = videoIdFromPipedItem(it);
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    mapped.push({
-      id,
-      title: it.title || '',
-      channel: it.uploaderName || it.uploader || 'YouTube',
-      duration: fmtDuration(it.duration),
-      thumbnail: it.thumbnail || null,
-      url: `https://www.youtube.com/watch?v=${id}`,
-    });
-    if (mapped.length >= limit) break;
-  }
-  return mapped;
-}
-
-async function searchViaInvidious(query, limit) {
-  const items = await tryFetch(INVIDIOUS_INSTANCES,
-    `/api/v1/search?q=${encodeURIComponent(query)}&type=video`);
-  const mapped = [];
-  const seen = new Set();
-  for (const it of items || []) {
-    const id = it.videoId;
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    mapped.push({
-      id,
-      title: it.title || '',
-      channel: it.author || 'YouTube',
-      duration: fmtDuration(it.lengthSeconds),
-      thumbnail: it.videoThumbnails?.[0]?.url || null,
-      url: `https://www.youtube.com/watch?v=${id}`,
-    });
-    if (mapped.length >= limit) break;
-  }
-  return mapped;
-}
-
 export async function searchMusic(query, limit = 30) {
-  // Try Piped first; if every instance is unreachable, fall back to Invidious.
-  try {
-    const r = await searchViaPiped(query, limit);
-    if (r.length > 0) return r;
-  } catch (e) { /* fall through */ }
-  return searchViaInvidious(query, limit);
-}
-
-function pickBestAudio(streams) {
-  if (!Array.isArray(streams) || !streams.length) return null;
-  // Prefer m4a (mp4 audio) for best Android compatibility, then by bitrate.
-  const sorted = [...streams].sort((a, b) => {
-    const aMp4 = (a.mimeType || '').includes('mp4') ? 1 : 0;
-    const bMp4 = (b.mimeType || '').includes('mp4') ? 1 : 0;
-    if (aMp4 !== bMp4) return bMp4 - aMp4;
-    return (b.bitrate || 0) - (a.bitrate || 0);
-  });
-  return sorted[0];
-}
-
-async function getAudioFromPiped(videoId) {
-  const data = await pipedFetch(`/streams/${videoId}`);
-  const fmt = pickBestAudio(data?.audioStreams);
-  return fmt?.url || null;
-}
-
-async function getAudioFromInvidious(videoId) {
-  // Invidious /api/v1/videos/{id} returns adaptiveFormats[] with direct urls.
-  const data = await tryFetch(INVIDIOUS_INSTANCES, `/api/v1/videos/${videoId}`);
-  const formats = data?.adaptiveFormats || [];
-  // Audio formats have type starting with "audio/"
-  const audio = formats
-    .filter((f) => (f.type || f.mimeType || '').startsWith('audio/'))
-    .filter((f) => f.url)
-    .sort((a, b) => (parseInt(b.bitrate, 10) || 0) - (parseInt(a.bitrate, 10) || 0));
-  return audio[0]?.url || null;
-}
-
-async function cobaltRequest(base, body, version) {
-  // Cobalt v10 uses POST / with downloadMode; v7 used POST /api/json with isAudioOnly.
-  const path = version === 'v10' ? '/' : '/api/json';
-  const res = await fetchWithTimeout(base + path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify(body),
-  }, 10000);
-  if (!res.ok) throw new Error(`${base} ${res.status}`);
-  return res.json();
-}
-
-async function getAudioFromCobalt(videoId) {
-  const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
-  let lastError;
-  for (const base of COBALT_INSTANCES) {
-    // Try v10 schema first (most current), fall back to v7 schema.
-    for (const [version, body] of [
-      ['v10', { url: youtubeUrl, downloadMode: 'audio', audioFormat: 'best', filenameStyle: 'basic' }],
-      ['v7', { url: youtubeUrl, isAudioOnly: true, audioFormat: 'best' }],
-    ]) {
-      try {
-        const data = await cobaltRequest(base, body, version);
-        if (data?.status === 'error') { lastError = new Error(data.text || 'cobalt error'); continue; }
-        if (data?.url) return data.url;
-        if (data?.audio) return data.audio;
-      } catch (e) { lastError = e; }
-    }
-  }
-  if (lastError) throw lastError;
-  return null;
-}
-
-// Try to grab a stream url through the Piped proxy by hitting
-// pipedproxy directly — works for videos that fail through the API.
-async function getAudioFromPipedProxy(videoId) {
-  // The /streams/{id} response sometimes carries a deciphered url even when
-  // its audioStreams array is empty; pull it from the embed URL too.
-  const embedHosts = [
-    'https://piped.video',
-    'https://piped.kavin.rocks',
-    'https://piped.privacy.com.de',
-  ];
-  for (const host of embedHosts) {
-    try {
-      const html = await fetchWithTimeout(`${host}/embed/${videoId}`, {}, 7000)
-        .then((r) => (r.ok ? r.text() : ''));
-      const match = html.match(/"audioStream":\s*"([^"]+\.googlevideo\.com[^"]*)"/);
-      if (match) return match[1].replace(/\\u0026/g, '&');
-    } catch (e) { /* try next */ }
-  }
-  return null;
+  const data = await apiGet(
+    `/search?q=${encodeURIComponent(query)}&limit=${limit}`,
+    20000 // search can take a few seconds on YouTube
+  );
+  // The server returns either {results: [...]} or a flat array — handle both.
+  const items = Array.isArray(data) ? data : (data.results || []);
+  return items.map((it) => ({
+    id: it.id,
+    title: it.title || '',
+    channel: it.channel || it.uploader || 'YouTube',
+    duration: typeof it.duration === 'number' ? fmtDuration(it.duration) : (it.duration || ''),
+    thumbnail: it.thumbnail || (it.id ? `https://i.ytimg.com/vi/${it.id}/hqdefault.jpg` : null),
+    url: it.url || (it.id ? `https://www.youtube.com/watch?v=${it.id}` : ''),
+  })).filter((v) => v.id);
 }
 
 export async function getAudioStreamUrl(videoId) {
-  // Collect a per-tier failure summary so the user / Discord webhook know
-  // exactly which providers failed and why instead of seeing only the last error.
-  const errors = [];
-  // Tier 1: Piped API — direct CDN url, fastest when available.
-  try {
-    const url = await getAudioFromPiped(videoId);
-    if (url) return url;
-    errors.push('Piped: no audio in response');
-  } catch (e) { errors.push(`Piped: ${e.message || e}`); }
-  // Tier 2: Invidious — same idea as Piped, different network.
-  try {
-    const url = await getAudioFromInvidious(videoId);
-    if (url) return url;
-    errors.push('Invidious: no audio in response');
-  } catch (e) { errors.push(`Invidious: ${e.message || e}`); }
-  // Tier 3: Cobalt — heavier hitters that proxy the actual file.
-  try {
-    const url = await getAudioFromCobalt(videoId);
-    if (url) return url;
-    errors.push('Cobalt: no audio in response');
-  } catch (e) { errors.push(`Cobalt: ${e.message || e}`); }
-  // Tier 4: Piped embed page scrape — last-ditch.
-  try {
-    const url = await getAudioFromPipedProxy(videoId);
-    if (url) return url;
-    errors.push('PipedProxy: no audio extracted');
-  } catch (e) { errors.push(`PipedProxy: ${e.message || e}`); }
-
-  throw new Error('All providers failed:\n' + errors.join('\n'));
+  const data = await apiGet(`/stream/${videoId}`, 15000);
+  const url = data?.url || data?.audio || null;
+  if (!url) throw new Error('No playable audio stream returned by API');
+  return url;
 }
 
 const sanitize = (name) =>
