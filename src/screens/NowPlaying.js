@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, Image, TouchableOpacity, Modal, StyleSheet,
-  ScrollView, ActivityIndicator, FlatList,
+  ScrollView, ActivityIndicator, FlatList, Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -16,7 +16,7 @@ const fmt = (s) => {
   return `${m}:${String(r).padStart(2, '0')}`;
 };
 
-const LYRICS_CACHE_PREFIX = 'playfool_mobile_lyrics:';
+const REJECT_KEY = 'playfool_mobile_lyrics_rejected';
 
 function splitArtistTitle(title) {
   if (!title) return null;
@@ -29,26 +29,61 @@ function splitArtistTitle(title) {
   return null;
 }
 
-async function loadLyricsText(song) {
+function songKey(artist, title) {
+  return `${(artist || '').toLowerCase().trim()}|${(title || '').toLowerCase().trim()}`;
+}
+
+async function loadRejected(key) {
+  try {
+    const raw = await AsyncStorage.getItem(REJECT_KEY);
+    const all = raw ? JSON.parse(raw) : {};
+    return Array.isArray(all[key]) ? all[key] : [];
+  } catch (e) { return []; }
+}
+
+async function saveRejected(key, ids) {
+  try {
+    const raw = await AsyncStorage.getItem(REJECT_KEY);
+    const all = raw ? JSON.parse(raw) : {};
+    all[key] = ids;
+    await AsyncStorage.setItem(REJECT_KEY, JSON.stringify(all));
+  } catch (e) {}
+}
+
+async function loadLyricsForSong(song) {
   const split = splitArtistTitle(song.title);
   if (!split) return { status: 'unparseable' };
-  const key = LYRICS_CACHE_PREFIX + `${split.artist}|${split.title}`.toLowerCase();
-  const cached = await AsyncStorage.getItem(key).catch(() => null);
-  if (cached) return { status: 'ok', text: cached };
+  const key = songKey(split.artist, split.title);
+  const rejected = await loadRejected(key);
   try {
-    const lr = await fetch(
-      `https://lrclib.net/api/get?artist_name=${encodeURIComponent(split.artist)}&track_name=${encodeURIComponent(split.title)}`
-    );
-    if (lr.ok) {
-      const d = await lr.json();
-      const text = d?.plainLyrics || d?.syncedLyrics?.replace(/\[\d+:\d+\.\d+\]/g, '').trim();
-      if (text) {
-        try { await AsyncStorage.setItem(key, text); } catch (e) {}
-        return { status: 'ok', text };
-      }
-    }
-  } catch (e) {}
-  return { status: 'notfound' };
+    const q = `${split.title} ${split.artist}`.trim();
+    const res = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(q)}`, {
+      headers: { Accept: 'application/json' },
+    });
+    if (!res.ok) return { status: 'notfound' };
+    const results = await res.json();
+    if (!Array.isArray(results) || results.length === 0) return { status: 'notfound' };
+    const rejectedSet = new Set((rejected || []).map(String));
+    const eligible = results
+      .map((r, i) => ({ ...r, _index: i }))
+      .filter((r) => !rejectedSet.has(String(r.id)));
+    if (!eligible.length) return { status: rejected.length ? 'noMore' : 'notfound' };
+    const pick = eligible.find((r) => r.syncedLyrics) || eligible[0];
+    const text = pick.plainLyrics
+      || (pick.syncedLyrics && pick.syncedLyrics.replace(/\[\d+:\d+\.\d+\]/g, '').trim())
+      || '';
+    if (!text) return { status: 'notfound' };
+    return {
+      status: 'ok',
+      text,
+      sourceId: String(pick.id),
+      total: results.length,
+      current: pick._index + 1,
+      songKey: key,
+    };
+  } catch (e) {
+    return { status: 'error' };
+  }
 }
 
 export default function NowPlaying({ visible, onClose }) {
@@ -67,16 +102,40 @@ export default function NowPlaying({ visible, onClose }) {
   // Reset to upnext tab whenever the modal opens
   useEffect(() => { if (visible) setTab('upnext'); }, [visible]);
 
+  const reloadLyrics = useCallback(() => {
+    if (!currentSong) return;
+    setLyrics({ status: 'loading', text: '' });
+    loadLyricsForSong(currentSong)
+      .then((r) => setLyrics(r))
+      .catch((e) => { reportError('nowplaying.lyrics', e); setLyrics({ status: 'notfound' }); });
+  }, [currentSong]);
+
   // Load lyrics when the lyrics tab is opened or the song changes
   useEffect(() => {
     if (!visible || tab !== 'lyrics' || !currentSong) return;
     if (lastSongIdRef.current === currentSong.id && lyrics.status !== 'idle') return;
     lastSongIdRef.current = currentSong.id;
-    setLyrics({ status: 'loading', text: '' });
-    loadLyricsText(currentSong)
-      .then((r) => setLyrics(r))
-      .catch((e) => { reportError('nowplaying.lyrics', e); setLyrics({ status: 'notfound' }); });
-  }, [visible, tab, currentSong]);
+    reloadLyrics();
+  }, [visible, tab, currentSong, reloadLyrics, lyrics.status]);
+
+  const skipMatch = async () => {
+    if (!lyrics?.songKey || !lyrics?.sourceId) return;
+    const next = Array.from(new Set([...(await loadRejected(lyrics.songKey)), lyrics.sourceId]));
+    await saveRejected(lyrics.songKey, next);
+    reloadLyrics();
+  };
+
+  const markWrong = () => {
+    if (!lyrics?.songKey || !lyrics?.sourceId) return;
+    Alert.alert(
+      'Mark lyrics as wrong?',
+      "We won't show this match for this song again.",
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Yes, skip these', style: 'destructive', onPress: skipMatch },
+      ],
+    );
+  };
 
   const upcoming = (() => {
     const list = [];
@@ -228,8 +287,45 @@ export default function NowPlaying({ visible, onClose }) {
                   <Text style={styles.lyricsHint}>This track isn't in our lyrics database yet.</Text>
                 </View>
               )}
+              {lyrics.status === 'noMore' && (
+                <View style={styles.lyricsCenter}>
+                  <Ionicons name="musical-notes-outline" size={40} color={theme.textMuted} />
+                  <Text style={styles.lyricsTitle}>No more matches to try</Text>
+                  <Text style={styles.lyricsHint}>You've rejected all matches for this song.</Text>
+                </View>
+              )}
+              {lyrics.status === 'error' && (
+                <View style={styles.lyricsCenter}>
+                  <Ionicons name="cloud-offline-outline" size={40} color={theme.textMuted} />
+                  <Text style={styles.lyricsTitle}>Couldn't load lyrics</Text>
+                  <Text style={styles.lyricsHint}>Check your connection and try again.</Text>
+                </View>
+              )}
               {lyrics.status === 'ok' && (
-                <Text style={styles.lyricsBody}>{lyrics.text}</Text>
+                <>
+                  <Text style={styles.lyricsBody}>{lyrics.text}</Text>
+                  {lyrics.total > 0 && (
+                    <View style={styles.matchBar}>
+                      <Text style={styles.matchSource}>
+                        lrclib · {lyrics.current}/{lyrics.total}
+                      </Text>
+                      <View style={styles.matchActions}>
+                        <TouchableOpacity
+                          onPress={skipMatch}
+                          disabled={lyrics.total <= lyrics.current}
+                          style={[styles.matchBtn, lyrics.total <= lyrics.current && styles.matchBtnDisabled]}
+                        >
+                          <Ionicons name="play-skip-forward" size={11} color={theme.textSecondary} />
+                          <Text style={styles.matchBtnText}>Try next</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={markWrong} style={styles.matchBtn}>
+                          <Ionicons name="thumbs-down" size={11} color={theme.textSecondary} />
+                          <Text style={styles.matchBtnText}>Wrong</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  )}
+                </>
               )}
             </View>
           )}
@@ -306,4 +402,18 @@ const styles = StyleSheet.create({
   lyricsTitle: { color: theme.textPrimary, fontSize: 14, fontWeight: '700', marginTop: 10 },
   lyricsHint: { color: theme.textMuted, fontSize: 12, marginTop: 6, textAlign: 'center', paddingHorizontal: 24 },
   lyricsBody: { color: theme.textPrimary, fontSize: 14, lineHeight: 22 },
+  matchBar: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginTop: 16, paddingVertical: 8, paddingHorizontal: 12,
+    borderTopWidth: 1, borderTopColor: theme.border,
+  },
+  matchSource: { color: theme.textMuted, fontSize: 11 },
+  matchActions: { flexDirection: 'row', gap: 6 },
+  matchBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingVertical: 4, paddingHorizontal: 10,
+    borderRadius: 12, borderWidth: 1, borderColor: theme.border,
+  },
+  matchBtnDisabled: { opacity: 0.4 },
+  matchBtnText: { color: theme.textSecondary, fontSize: 11, fontWeight: '600' },
 });

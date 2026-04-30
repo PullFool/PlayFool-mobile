@@ -6,6 +6,7 @@ import * as Application from 'expo-application';
 import { theme, useTheme } from '../utils/theme';
 import SupportModal from '../components/SupportModal';
 import EqScreen from './EqScreen';
+import SyncScreen from './SyncScreen';
 import { recordHeart, HEARTED_KEY as HEART_KEY } from '../utils/hearts';
 import { EQ_AVAILABLE } from '../utils/eq';
 import { setCrossfadeSeconds } from '../utils/crossfade';
@@ -16,6 +17,7 @@ export default function Settings() {
   const { mode, toggle } = useTheme();
   const [showSupport, setShowSupport] = useState(false);
   const [showEq, setShowEq] = useState(false);
+  const [showSync, setShowSync] = useState(false);
   const [hasHearted, setHasHearted] = useState(false);
   const [crossfade, setCrossfade] = useState(0);
 
@@ -62,6 +64,17 @@ export default function Settings() {
           </TouchableOpacity>
         </View>
       ) : null}
+
+      <View style={styles.section}>
+        <Text style={styles.label}>Sync with PC</Text>
+        <Text style={styles.help}>
+          Pair this phone with PlayFool on your PC over Wi-Fi to share downloaded songs.
+        </Text>
+        <TouchableOpacity style={styles.themeBtn} onPress={() => setShowSync(true)}>
+          <Ionicons name="sync" size={16} color={theme.textPrimary} />
+          <Text style={styles.themeBtnText}>Open Sync</Text>
+        </TouchableOpacity>
+      </View>
 
       <View style={styles.section}>
         <Text style={styles.label}>Crossfade</Text>
@@ -126,6 +139,7 @@ export default function Settings() {
       />
 
       <EqScreen visible={showEq} onClose={() => setShowEq(false)} />
+      <SyncScreen visible={showSync} onClose={() => setShowSync(false)} />
     </ScrollView>
   );
 }

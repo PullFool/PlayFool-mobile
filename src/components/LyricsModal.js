@@ -1,13 +1,13 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, Modal, ScrollView, ActivityIndicator, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { View, Text, Modal, ScrollView, ActivityIndicator, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { theme } from '../utils/theme';
 import { reportError } from '../utils/errorReporter';
 
-const CACHE_PREFIX = 'playfool_mobile_lyrics:';
+const REJECT_KEY = 'playfool_mobile_lyrics_rejected'; // { "title|artist": ["id"...] }
+const LRCLIB_BASE = 'https://lrclib.net/api';
 
-// Parse "Artist - Title (anything)" patterns common in YouTube downloads.
 function splitArtistTitle(title) {
   if (!title) return null;
   const cleaned = title
@@ -21,80 +21,113 @@ function splitArtistTitle(title) {
   return null;
 }
 
-// Sentinel thrown when the lyrics provider responds with 404 — we treat this
-// as an expected 'not found' state instead of a reportable error.
-class LyricsNotFound extends Error {
-  constructor(msg) { super(msg); this.code = 'NOT_FOUND'; }
+function songKey(artist, title) {
+  return `${(artist || '').toLowerCase().trim()}|${(title || '').toLowerCase().trim()}`;
 }
 
-async function fetchLyrics(artist, title) {
-  // Try lrclib.net first (same source the desktop app uses) — bigger catalog
-  // and synced lyrics. Fall back to api.lyrics.ovh if lrclib has nothing.
+async function loadRejected(key) {
   try {
-    const lr = await fetch(
-      `https://lrclib.net/api/get?artist_name=${encodeURIComponent(artist)}&track_name=${encodeURIComponent(title)}`,
-      { headers: { Accept: 'application/json' } }
-    );
-    if (lr.ok) {
-      const d = await lr.json();
-      const text = d?.syncedLyrics || d?.plainLyrics;
-      if (text && text.trim()) return text.trim();
-    }
-  } catch (e) { /* try fallback */ }
+    const raw = await AsyncStorage.getItem(REJECT_KEY);
+    const all = raw ? JSON.parse(raw) : {};
+    return Array.isArray(all[key]) ? all[key] : [];
+  } catch (e) { return []; }
+}
 
-  const res = await fetch(
-    `https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(title)}`
-  );
-  if (res.status === 404) throw new LyricsNotFound('No lyrics found for this song');
-  if (!res.ok) throw new Error(`Lyrics API ${res.status}`);
-  const data = await res.json();
-  if (!data.lyrics) throw new LyricsNotFound('No lyrics found for this song');
-  return data.lyrics.trim();
+async function saveRejected(key, ids) {
+  try {
+    const raw = await AsyncStorage.getItem(REJECT_KEY);
+    const all = raw ? JSON.parse(raw) : {};
+    all[key] = ids;
+    await AsyncStorage.setItem(REJECT_KEY, JSON.stringify(all));
+  } catch (e) {}
+}
+
+// Fetch all lrclib search results so we can step through matches the user
+// hasn't rejected. Returns the picked match + count metadata.
+async function fetchLyricsWithMatch(artist, title, rejectedIds) {
+  const q = `${title} ${artist}`.trim();
+  const res = await fetch(`${LRCLIB_BASE}/search?q=${encodeURIComponent(q)}`, {
+    headers: { Accept: 'application/json' },
+  });
+  if (!res.ok) throw new Error(`lrclib ${res.status}`);
+  const results = await res.json();
+  if (!Array.isArray(results) || results.length === 0) return null;
+
+  const rejectedSet = new Set((rejectedIds || []).map(String));
+  const eligible = results
+    .map((r, i) => ({ ...r, _index: i }))
+    .filter((r) => !rejectedSet.has(String(r.id)));
+  if (!eligible.length) return null;
+
+  // Prefer synced over plain.
+  const pick = eligible.find((r) => r.syncedLyrics) || eligible[0];
+  const text = pick.syncedLyrics || pick.plainLyrics || '';
+  if (!text.trim()) return null;
+  return {
+    text: text.trim(),
+    synced: !!pick.syncedLyrics,
+    sourceId: String(pick.id),
+    totalMatches: results.length,
+    currentIndex: pick._index + 1,
+  };
 }
 
 export default function LyricsModal({ open, song, onClose }) {
   const [lyrics, setLyrics] = useState('');
+  const [match, setMatch] = useState(null);
   const [loading, setLoading] = useState(false);
   // status: '' | 'notfound' | 'unparseable' | 'error'
   const [status, setStatus] = useState('');
+  const [keyParts, setKeyParts] = useState(null);
+
+  const load = useCallback(async (parts) => {
+    setLyrics(''); setStatus(''); setMatch(null);
+    setLoading(true);
+    try {
+      const key = songKey(parts.artist, parts.title);
+      const rejected = await loadRejected(key);
+      const result = await fetchLyricsWithMatch(parts.artist, parts.title, rejected);
+      if (!result) {
+        setStatus(rejected.length ? 'noMore' : 'notfound');
+        return;
+      }
+      setLyrics(result.text);
+      setMatch({ sourceId: result.sourceId, total: result.totalMatches, current: result.currentIndex });
+    } catch (e) {
+      reportError('lyrics', e, { song: parts.title });
+      setStatus('error');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (!open || !song) return;
-    setLyrics('');
-    setStatus('');
+    const parts = splitArtistTitle(song.title);
+    if (!parts) { setStatus('unparseable'); setKeyParts(null); return; }
+    setKeyParts(parts);
+    load(parts);
+  }, [open, song, load]);
 
-    const split = splitArtistTitle(song.title);
-    if (!split) {
-      setStatus('unparseable');
-      return;
-    }
+  const skipMatch = async () => {
+    if (!keyParts || !match?.sourceId) return;
+    const key = songKey(keyParts.artist, keyParts.title);
+    const next = Array.from(new Set([...(await loadRejected(key)), match.sourceId]));
+    await saveRejected(key, next);
+    load(keyParts);
+  };
 
-    const cacheKey = CACHE_PREFIX + `${split.artist}|${split.title}`.toLowerCase();
-    setLoading(true);
-
-    (async () => {
-      try {
-        const cached = await AsyncStorage.getItem(cacheKey);
-        if (cached) {
-          setLyrics(cached);
-          setLoading(false);
-          return;
-        }
-        const text = await fetchLyrics(split.artist, split.title);
-        setLyrics(text);
-        try { await AsyncStorage.setItem(cacheKey, text); } catch (e) {}
-      } catch (e) {
-        if (e.code === 'NOT_FOUND') {
-          setStatus('notfound');
-        } else {
-          reportError('lyrics', e, { song: song.title });
-          setStatus('error');
-        }
-      } finally {
-        setLoading(false);
-      }
-    })();
-  }, [open, song]);
+  const markWrong = () => {
+    if (!keyParts || !match?.sourceId) return;
+    Alert.alert(
+      'Mark lyrics as wrong?',
+      `We won't show this match for "${song?.title || 'this song'}" again.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Yes, skip these', style: 'destructive', onPress: skipMatch },
+      ],
+    );
+  };
 
   return (
     <Modal visible={open} transparent animationType="slide" onRequestClose={onClose}>
@@ -112,12 +145,16 @@ export default function LyricsModal({ open, song, onClose }) {
               <ActivityIndicator size="large" color={theme.green} />
               <Text style={styles.statusText}>Searching lyrics...</Text>
             </View>
-          ) : status === 'notfound' ? (
+          ) : status === 'notfound' || status === 'noMore' ? (
             <View style={styles.center}>
               <Ionicons name="musical-notes-outline" size={56} color={theme.textMuted} />
-              <Text style={styles.emptyTitle}>No lyrics found</Text>
+              <Text style={styles.emptyTitle}>
+                {status === 'noMore' ? 'No more matches to try' : 'No lyrics found'}
+              </Text>
               <Text style={styles.emptyHint}>
-                We couldn't find lyrics for this track. It might be too new, an instrumental, or just not in our database yet.
+                {status === 'noMore'
+                  ? "You've rejected every match for this song. Reset rejections in Settings if you want to try again."
+                  : "We couldn't find lyrics for this track. It might be too new, an instrumental, or just not in our database yet."}
               </Text>
             </View>
           ) : status === 'unparseable' ? (
@@ -141,6 +178,28 @@ export default function LyricsModal({ open, song, onClose }) {
               <Text style={styles.lyrics}>{lyrics}</Text>
             </ScrollView>
           )}
+
+          {match && match.total > 0 && !loading && (
+            <View style={styles.matchBar}>
+              <Text style={styles.matchSource}>
+                lrclib · match {match.current} of {match.total}
+              </Text>
+              <View style={styles.matchActions}>
+                <TouchableOpacity
+                  onPress={skipMatch}
+                  disabled={match.total <= match.current}
+                  style={[styles.matchBtn, match.total <= match.current && styles.matchBtnDisabled]}
+                >
+                  <Ionicons name="play-skip-forward" size={12} color={theme.textSecondary} />
+                  <Text style={styles.matchBtnText}>Try next</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={markWrong} style={styles.matchBtn}>
+                  <Ionicons name="thumbs-down" size={12} color={theme.textSecondary} />
+                  <Text style={styles.matchBtnText}>Wrong</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
         </View>
       </View>
     </Modal>
@@ -159,4 +218,19 @@ const styles = StyleSheet.create({
   statusText: { color: theme.textMuted, marginTop: 12, textAlign: 'center', fontSize: 13 },
   emptyTitle: { color: theme.textPrimary, marginTop: 16, fontSize: 16, fontWeight: '700' },
   emptyHint: { color: theme.textMuted, marginTop: 8, textAlign: 'center', fontSize: 13, lineHeight: 18, paddingHorizontal: 16 },
+  matchBar: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 16, paddingVertical: 8,
+    borderTopWidth: 1, borderTopColor: theme.border,
+    backgroundColor: theme.bgPrimary,
+  },
+  matchSource: { color: theme.textMuted, fontSize: 11 },
+  matchActions: { flexDirection: 'row', gap: 6 },
+  matchBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingVertical: 4, paddingHorizontal: 10,
+    borderRadius: 12, borderWidth: 1, borderColor: theme.border,
+  },
+  matchBtnDisabled: { opacity: 0.4 },
+  matchBtnText: { color: theme.textSecondary, fontSize: 11, fontWeight: '600' },
 });
