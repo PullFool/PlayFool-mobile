@@ -37,3 +37,24 @@ export async function recordHeart(appVersion = '1.0.0') {
 export async function hasHearted() {
   return (await AsyncStorage.getItem(HEARTED_KEY)) === '1';
 }
+
+const DONATED_KEY = 'playfool_mobile_donated';
+export const DONATED_STORAGE_KEY = DONATED_KEY;
+
+export async function hasDonated() {
+  return (await AsyncStorage.getItem(DONATED_KEY)) === '1';
+}
+
+export async function markDonated() {
+  try { await AsyncStorage.setItem(DONATED_KEY, '1'); } catch (e) {}
+}
+
+const PROMPT_OPT_OUT_KEY = 'playfool_mobile_prompt_optout';
+
+export async function isPromptOptOut() {
+  return (await AsyncStorage.getItem(PROMPT_OPT_OUT_KEY)) === '1';
+}
+
+export async function setPromptOptOut() {
+  try { await AsyncStorage.setItem(PROMPT_OPT_OUT_KEY, '1'); } catch (e) {}
+}

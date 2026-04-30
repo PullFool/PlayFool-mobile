@@ -2,37 +2,42 @@ import React, { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Application from 'expo-application';
 import SupportModal from './SupportModal';
-import { recordHeart, hasHearted, HEARTED_KEY } from '../utils/hearts';
+import {
+  recordHeart, hasHearted, hasDonated, markDonated,
+  isPromptOptOut, setPromptOptOut,
+} from '../utils/hearts';
 
 const LAUNCH_COUNT_KEY = 'playfool_mobile_launch_count';
-const PROMPT_SEEN_KEY = 'playfool_mobile_heart_prompt_seen';
 
-// Tracks how many times the app has been opened and shows the heart/support
-// modal automatically on the 2nd launch — but only once. If the user already
-// tapped the heart on Settings, skip the auto-prompt entirely.
+// Prompts the heart/donate modal on a fading cadence so we don't pester users:
+//   - Launch 2:  show once  (catch them after they've tried the app)
+//   - Launch 12, 22, 32, ...: show again if they still haven't donated (every 10 thereafter)
+//   - Tapping 'Don't ask again' in the modal silences it forever
+//   - Marking donated (tapping 'Yes, support on Ko-fi') silences it forever
 export default function HeartPrompt() {
   const [show, setShow] = useState(false);
+  const [alreadyHearted, setAlreadyHearted] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        if (await hasHearted()) return;
-        const seen = await AsyncStorage.getItem(PROMPT_SEEN_KEY);
-        if (seen === '1') return;
+        if (await hasDonated()) return;
+        if (await isPromptOptOut()) return;
+        const hearted = await hasHearted();
+        if (cancelled) return;
+        setAlreadyHearted(hearted);
 
         const raw = await AsyncStorage.getItem(LAUNCH_COUNT_KEY);
         const count = (parseInt(raw || '0', 10) || 0) + 1;
         try { await AsyncStorage.setItem(LAUNCH_COUNT_KEY, String(count)); } catch (e) {}
 
-        if (count >= 2 && !cancelled) {
-          // Mark prompt as shown immediately so a quick close-and-reopen doesn't
-          // double-fire it.
-          try { await AsyncStorage.setItem(PROMPT_SEEN_KEY, '1'); } catch (e) {}
-          // Small delay so the prompt feels deliberate, not instant on launch.
-          setTimeout(() => { if (!cancelled) setShow(true); }, 800);
+        // Show on launch 2, then every 10 after that (12, 22, 32, ...)
+        const shouldShow = count === 2 || (count > 2 && (count - 2) % 10 === 0);
+        if (shouldShow) {
+          setTimeout(() => { if (!cancelled) setShow(true); }, 1200);
         }
-      } catch (e) { /* silent */ }
+      } catch (e) {}
     })();
     return () => { cancelled = true; };
   }, []);
@@ -40,7 +45,27 @@ export default function HeartPrompt() {
   const handleLike = async () => {
     const version = Application.nativeApplicationVersion || 'dev';
     await recordHeart(version);
+    setAlreadyHearted(true);
   };
 
-  return <SupportModal open={show} onClose={() => setShow(false)} onLike={handleLike} />;
+  const handleDonate = async () => {
+    // User tapped 'Yes, support on Ko-fi'. Stop prompting forever.
+    await markDonated();
+  };
+
+  const handleDontAskAgain = async () => {
+    await setPromptOptOut();
+    setShow(false);
+  };
+
+  return (
+    <SupportModal
+      open={show}
+      alreadyHearted={alreadyHearted}
+      onLike={handleLike}
+      onDonate={handleDonate}
+      onDontAskAgain={handleDontAskAgain}
+      onClose={() => setShow(false)}
+    />
+  );
 }

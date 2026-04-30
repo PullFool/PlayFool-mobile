@@ -5,7 +5,7 @@ import { theme } from '../utils/theme';
 
 const KOFI_URL = 'https://ko-fi.com/PullFool';
 
-export default function SupportModal({ open, alreadyHearted = false, onClose, onLike }) {
+export default function SupportModal({ open, alreadyHearted = false, onClose, onLike, onDonate, onDontAskAgain }) {
   const [stage, setStage] = useState(alreadyHearted ? 'donate' : 'ask');
 
   useEffect(() => {
@@ -14,6 +14,7 @@ export default function SupportModal({ open, alreadyHearted = false, onClose, on
 
   const openKofi = () => {
     Linking.openURL(KOFI_URL);
+    if (onDonate) onDonate();
     onClose();
   };
 
@@ -62,6 +63,11 @@ export default function SupportModal({ open, alreadyHearted = false, onClose, on
                 <TouchableOpacity style={styles.secondary} onPress={onClose}>
                   <Text style={styles.secondaryText}>Maybe later</Text>
                 </TouchableOpacity>
+                {onDontAskAgain ? (
+                  <TouchableOpacity style={styles.tertiary} onPress={onDontAskAgain}>
+                    <Text style={styles.tertiaryText}>Don't ask again</Text>
+                  </TouchableOpacity>
+                ) : null}
               </View>
             </>
           )}
@@ -95,4 +101,6 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: theme.border, backgroundColor: 'transparent',
   },
   secondaryText: { color: theme.textSecondary, fontWeight: '600', fontSize: 14 },
+  tertiary: { paddingVertical: 8, alignItems: 'center' },
+  tertiaryText: { color: theme.textSecondary, fontSize: 12, opacity: 0.7 },
 });
