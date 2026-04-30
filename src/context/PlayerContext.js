@@ -3,6 +3,7 @@ import TrackPlayer, {
   Capability, RepeatMode, Event, State, useTrackPlayerEvents, useProgress,
 } from 'react-native-track-player';
 import { reportError } from '../utils/errorReporter';
+import { tick as crossfadeTick, abortCrossfade, loadCrossfadeSetting } from '../utils/crossfade';
 
 const PlayerContext = createContext();
 export const usePlayer = () => useContext(PlayerContext);
@@ -74,7 +75,20 @@ export function PlayerProvider({ children }) {
   // Initialize TrackPlayer on mount
   useEffect(() => {
     setupTrackPlayerOnce().catch((e) => reportError('player.setup', e));
+    loadCrossfadeSetting();
   }, []);
+
+  // Drive the crossfade controller from each progress tick.
+  useEffect(() => {
+    const cur = songs[currentIndex];
+    const next = songs[currentIndex + 1];
+    if (!cur || !next) return;
+    crossfadeTick({
+      position, duration,
+      currentTrackId: cur.id,
+      nextTrack: next,
+    });
+  }, [position, duration, songs, currentIndex]);
 
   // Apply repeat mode to TrackPlayer
   useEffect(() => {
@@ -112,6 +126,7 @@ export function PlayerProvider({ children }) {
 
   const playSong = useCallback(async (songList, index) => {
     try {
+      await abortCrossfade();
       await setupTrackPlayerOnce();
       setSongs(songList);
       setCurrentIndex(index);
@@ -134,6 +149,7 @@ export function PlayerProvider({ children }) {
   }, []);
 
   const skipNext = useCallback(async () => {
+    await abortCrossfade();
     // Manual queue takes priority — splice the next queued song in
     if (queue.length > 0) {
       const nextSong = queue[0];
@@ -156,6 +172,7 @@ export function PlayerProvider({ children }) {
   }, [queue, songs, currentIndex, shuffle, repeat, playSong]);
 
   const skipPrev = useCallback(async () => {
+    await abortCrossfade();
     if (songs.length === 0) return;
     if (position > 3) {
       try { await TrackPlayer.seekTo(0); } catch (e) {}

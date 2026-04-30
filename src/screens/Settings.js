@@ -5,18 +5,32 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Application from 'expo-application';
 import { theme, useTheme } from '../utils/theme';
 import SupportModal from '../components/SupportModal';
+import EqScreen from './EqScreen';
 import { recordHeart, HEARTED_KEY as HEART_KEY } from '../utils/hearts';
+import { EQ_AVAILABLE } from '../utils/eq';
+import { setCrossfadeSeconds } from '../utils/crossfade';
 
 const KOFI_URL = 'https://ko-fi.com/PullFool';
 
 export default function Settings() {
   const { mode, toggle } = useTheme();
   const [showSupport, setShowSupport] = useState(false);
+  const [showEq, setShowEq] = useState(false);
   const [hasHearted, setHasHearted] = useState(false);
+  const [crossfade, setCrossfade] = useState(0);
 
   useEffect(() => {
     AsyncStorage.getItem(HEART_KEY).then((v) => setHasHearted(v === '1'));
+    AsyncStorage.getItem('playfool_mobile_crossfade_seconds').then((v) => {
+      const n = parseInt(v || '0', 10);
+      setCrossfade(isNaN(n) ? 0 : n);
+    });
   }, []);
+
+  const onCrossfadeChange = (s) => {
+    setCrossfade(s);
+    setCrossfadeSeconds(s);
+  };
 
   const onHeartTap = () => setShowSupport(true);
 
@@ -36,6 +50,37 @@ export default function Settings() {
           Free, ad-free music player with built-in YouTube search and download.{'\n\n'}
           Downloaded MP3s and your phone's existing audio files all live in My Music.
         </Text>
+      </View>
+
+      {EQ_AVAILABLE ? (
+        <View style={styles.section}>
+          <Text style={styles.label}>Equalizer</Text>
+          <Text style={styles.help}>10-band system EQ with presets. Affects all music output.</Text>
+          <TouchableOpacity style={styles.themeBtn} onPress={() => setShowEq(true)}>
+            <Ionicons name="options" size={16} color={theme.textPrimary} />
+            <Text style={styles.themeBtnText}>Open Equalizer</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
+      <View style={styles.section}>
+        <Text style={styles.label}>Crossfade</Text>
+        <Text style={styles.help}>
+          Overlap the end of one song with the start of the next. Set to 0 to disable.
+        </Text>
+        <View style={styles.crossfadeRow}>
+          {[0, 2, 4, 6, 8, 10, 12].map((s) => (
+            <TouchableOpacity
+              key={s}
+              onPress={() => onCrossfadeChange(s)}
+              style={[styles.cfPill, crossfade === s && styles.cfPillActive]}
+            >
+              <Text style={[styles.cfPillText, crossfade === s && styles.cfPillTextActive]}>
+                {s === 0 ? 'Off' : `${s}s`}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
       </View>
 
       <View style={styles.section}>
@@ -79,6 +124,8 @@ export default function Settings() {
         onClose={() => setShowSupport(false)}
         onLike={handleLike}
       />
+
+      <EqScreen visible={showEq} onClose={() => setShowEq(false)} />
     </ScrollView>
   );
 }
@@ -98,4 +145,12 @@ const styles = StyleSheet.create({
   themeBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: theme.bgSurface, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 20, alignSelf: 'flex-start' },
   themeBtnText: { color: theme.textPrimary, fontWeight: '600', fontSize: 13 },
   footer: { color: theme.textMuted, fontSize: 11, textAlign: 'center', marginTop: 24, marginBottom: 40 },
+  crossfadeRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  cfPill: {
+    paddingVertical: 8, paddingHorizontal: 14, borderRadius: 16,
+    backgroundColor: theme.bgSurface, borderWidth: 1, borderColor: theme.border,
+  },
+  cfPillActive: { backgroundColor: theme.green, borderColor: theme.green },
+  cfPillText: { color: theme.textSecondary, fontSize: 12, fontWeight: '600' },
+  cfPillTextActive: { color: '#000' },
 });

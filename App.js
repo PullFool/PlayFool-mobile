@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { View, StyleSheet } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
@@ -13,6 +13,7 @@ import UpdateBanner from './src/components/UpdateBanner';
 import HeartPrompt from './src/components/HeartPrompt';
 import { installErrorReporter } from './src/utils/errorReporter';
 import { ThemeProvider } from './src/utils/theme';
+import { restoreEq } from './src/utils/eq';
 
 installErrorReporter();
 import MyMusic from './src/screens/MyMusic';
@@ -56,6 +57,7 @@ const screenOptions = ({ route }) => ({
 
 function AppShell() {
   const [showNowPlaying, setShowNowPlaying] = useState(false);
+  useEffect(() => { restoreEq(); }, []);
   return (
     <>
       <SafeAreaView style={styles.root} edges={['top']}>
