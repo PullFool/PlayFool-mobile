@@ -1,81 +1,144 @@
 import React, { createContext, useContext, useState, useRef, useCallback, useEffect } from 'react';
-import { Audio } from 'expo-av';
+import TrackPlayer, {
+  Capability, RepeatMode, Event, State, useTrackPlayerEvents, useProgress,
+} from 'react-native-track-player';
 import { reportError } from '../utils/errorReporter';
 
 const PlayerContext = createContext();
 export const usePlayer = () => useContext(PlayerContext);
 
+const PLAY_EVENTS = [
+  Event.PlaybackState,
+  Event.PlaybackActiveTrackChanged,
+  Event.PlaybackError,
+];
+
+// Convert one of our song objects into a TrackPlayer Track shape
+const toTrack = (song) => ({
+  id: String(song.id),
+  url: song.url,
+  title: song.title || 'Unknown',
+  artist: song.artist || 'PlayFool',
+  artwork: song.cover || undefined,
+  // Stash original song so we can read it back later
+  __song: song,
+});
+
+let trackPlayerSetup = false;
+async function setupTrackPlayerOnce() {
+  if (trackPlayerSetup) return;
+  await TrackPlayer.setupPlayer({
+    autoHandleInterruptions: true,
+  });
+  await TrackPlayer.updateOptions({
+    android: {
+      appKilledPlaybackBehavior: 'StopPlaybackAndRemoveNotification',
+    },
+    capabilities: [
+      Capability.Play, Capability.Pause, Capability.Stop,
+      Capability.SkipToNext, Capability.SkipToPrevious,
+      Capability.SeekTo, Capability.JumpForward, Capability.JumpBackward,
+    ],
+    compactCapabilities: [
+      Capability.Play, Capability.Pause,
+      Capability.SkipToNext, Capability.SkipToPrevious,
+    ],
+    notificationCapabilities: [
+      Capability.Play, Capability.Pause, Capability.Stop,
+      Capability.SkipToNext, Capability.SkipToPrevious,
+      Capability.SeekTo, Capability.JumpForward, Capability.JumpBackward,
+    ],
+    progressUpdateEventInterval: 1,
+    forwardJumpInterval: 10,
+    backwardJumpInterval: 10,
+  });
+  trackPlayerSetup = true;
+}
+
 export function PlayerProvider({ children }) {
+  // Local mirror of TrackPlayer state so consumers (UI) re-render reactively.
   const [songs, setSongs] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(-1);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [position, setPosition] = useState(0);
-  const [duration, setDuration] = useState(0);
   const [shuffle, setShuffle] = useState(false);
   const [repeat, setRepeat] = useState(0); // 0 off, 1 all, 2 one
   const [queue, setQueue] = useState([]);
 
-  const soundRef = useRef(null);
-  const currentSong = currentIndex >= 0 ? songs[currentIndex] : null;
+  const songsRef = useRef([]);
+  const currentIndexRef = useRef(-1);
 
-  // Configure audio session for background playback on Android
+  // Keep refs in sync with state for use inside event handlers
+  useEffect(() => { songsRef.current = songs; }, [songs]);
+  useEffect(() => { currentIndexRef.current = currentIndex; }, [currentIndex]);
+
+  // Initialize TrackPlayer on mount
   useEffect(() => {
-    Audio.setAudioModeAsync({
-      staysActiveInBackground: true,
-      playsInSilentModeIOS: true,
-      shouldDuckAndroid: true,
-      playThroughEarpieceAndroid: false,
-    }).catch((e) => reportError('audio.setMode', e));
+    setupTrackPlayerOnce().catch((e) => reportError('player.setup', e));
   }, []);
 
-  const unload = async () => {
-    if (soundRef.current) {
-      try { await soundRef.current.unloadAsync(); } catch(e) {}
-      soundRef.current = null;
+  // Apply repeat mode to TrackPlayer
+  useEffect(() => {
+    const map = {
+      0: RepeatMode.Off,
+      1: RepeatMode.Queue,
+      2: RepeatMode.Track,
+    };
+    TrackPlayer.setRepeatMode(map[repeat] ?? RepeatMode.Off).catch(() => {});
+  }, [repeat]);
+
+  // Real-time playback state + position from TrackPlayer
+  const { position, duration } = useProgress(500);
+
+  useTrackPlayerEvents(PLAY_EVENTS, async (event) => {
+    if (event.type === Event.PlaybackError) {
+      reportError('player.playback', new Error(event.message || 'Playback error'), { code: event.code });
     }
-  };
+    if (event.type === Event.PlaybackState) {
+      const playing = event.state === State.Playing;
+      setIsPlaying(playing);
+    }
+    if (event.type === Event.PlaybackActiveTrackChanged) {
+      // Sync currentIndex from the active track id when TrackPlayer moves on its own
+      try {
+        const active = await TrackPlayer.getActiveTrack();
+        if (!active) return;
+        const idx = songsRef.current.findIndex((s) => String(s.id) === String(active.id));
+        if (idx >= 0 && idx !== currentIndexRef.current) setCurrentIndex(idx);
+      } catch (e) {}
+    }
+  });
+
+  const currentSong = currentIndex >= 0 ? songs[currentIndex] : null;
 
   const playSong = useCallback(async (songList, index) => {
-    setSongs(songList);
-    setCurrentIndex(index);
-    const song = songList[index];
-    if (!song) return;
-
-    await unload();
-
     try {
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: song.url },
-        { shouldPlay: true },
-        (status) => {
-          if (!status.isLoaded) return;
-          setIsPlaying(status.isPlaying);
-          setPosition(status.positionMillis / 1000);
-          setDuration((status.durationMillis || 0) / 1000);
-          if (status.didJustFinish) {
-            // auto-advance handled below via skipNext
-            skipNextRef.current && skipNextRef.current();
-          }
-        }
-      );
-      soundRef.current = sound;
+      await setupTrackPlayerOnce();
+      setSongs(songList);
+      setCurrentIndex(index);
+      const tracks = songList.map(toTrack);
+      await TrackPlayer.reset();
+      await TrackPlayer.add(tracks);
+      if (index > 0) await TrackPlayer.skip(index);
+      await TrackPlayer.play();
     } catch (e) {
-      reportError('player.playSong', e, { songUrl: song.url, title: song.title });
-      console.error('Play failed:', e);
+      reportError('player.playSong', e, { title: songList?.[index]?.title });
     }
   }, []);
 
   const togglePlayPause = useCallback(async () => {
-    if (!soundRef.current) return;
-    if (isPlaying) await soundRef.current.pauseAsync();
-    else await soundRef.current.playAsync();
-  }, [isPlaying]);
+    try {
+      const state = (await TrackPlayer.getPlaybackState()).state;
+      if (state === State.Playing) await TrackPlayer.pause();
+      else await TrackPlayer.play();
+    } catch (e) {}
+  }, []);
 
-  const skipNext = useCallback(() => {
+  const skipNext = useCallback(async () => {
+    // Manual queue takes priority — splice the next queued song in
     if (queue.length > 0) {
-      const next = queue[0];
+      const nextSong = queue[0];
       setQueue((q) => q.slice(1));
-      playSong([next], 0);
+      await playSong([nextSong], 0);
       return;
     }
     if (songs.length === 0) return;
@@ -84,28 +147,27 @@ export function PlayerProvider({ children }) {
     else {
       next = (currentIndex + 1) % songs.length;
       if (next === 0 && repeat === 0) {
-        soundRef.current?.pauseAsync();
+        try { await TrackPlayer.pause(); } catch (e) {}
         return;
       }
     }
-    playSong(songs, next);
-  }, [songs, currentIndex, shuffle, repeat, queue, playSong]);
+    setCurrentIndex(next);
+    try { await TrackPlayer.skip(next); await TrackPlayer.play(); } catch (e) {}
+  }, [queue, songs, currentIndex, shuffle, repeat, playSong]);
 
-  const skipNextRef = useRef(skipNext);
-  useEffect(() => { skipNextRef.current = skipNext; }, [skipNext]);
-
-  const skipPrev = useCallback(() => {
+  const skipPrev = useCallback(async () => {
     if (songs.length === 0) return;
     if (position > 3) {
-      soundRef.current?.setPositionAsync(0);
+      try { await TrackPlayer.seekTo(0); } catch (e) {}
       return;
     }
     const prev = (currentIndex - 1 + songs.length) % songs.length;
-    playSong(songs, prev);
-  }, [songs, currentIndex, position, playSong]);
+    setCurrentIndex(prev);
+    try { await TrackPlayer.skip(prev); await TrackPlayer.play(); } catch (e) {}
+  }, [songs, currentIndex, position]);
 
   const seekTo = useCallback(async (seconds) => {
-    if (soundRef.current) await soundRef.current.setPositionAsync(seconds * 1000);
+    try { await TrackPlayer.seekTo(seconds); } catch (e) {}
   }, []);
 
   const shufflePlay = useCallback((songList) => {
@@ -114,6 +176,13 @@ export function PlayerProvider({ children }) {
     setShuffle(true);
     playSong(shuffled, 0);
   }, [playSong]);
+
+  // Wire OS RemoteNext/RemotePrevious to our skip logic so the queue is
+  // honored from the notification / lock-screen too.
+  useTrackPlayerEvents([Event.RemoteNext, Event.RemotePrevious], (event) => {
+    if (event.type === Event.RemoteNext) skipNext();
+    if (event.type === Event.RemotePrevious) skipPrev();
+  });
 
   const value = {
     songs, currentSong, currentIndex, isPlaying, position, duration,

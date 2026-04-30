@@ -23,7 +23,10 @@
         "WRITE_EXTERNAL_STORAGE",
         "READ_MEDIA_AUDIO",
         "INTERNET",
-        "REQUEST_INSTALL_PACKAGES"
+        "REQUEST_INSTALL_PACKAGES",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+        "WAKE_LOCK"
       ]
     },
     "platforms": ["android"],
