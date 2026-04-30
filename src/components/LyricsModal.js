@@ -21,28 +21,51 @@ function splitArtistTitle(title) {
   return null;
 }
 
+// Sentinel thrown when the lyrics provider responds with 404 — we treat this
+// as an expected 'not found' state instead of a reportable error.
+class LyricsNotFound extends Error {
+  constructor(msg) { super(msg); this.code = 'NOT_FOUND'; }
+}
+
 async function fetchLyrics(artist, title) {
-  const url = `https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(title)}`;
-  const res = await fetch(url);
+  // Try lrclib.net first (same source the desktop app uses) — bigger catalog
+  // and synced lyrics. Fall back to api.lyrics.ovh if lrclib has nothing.
+  try {
+    const lr = await fetch(
+      `https://lrclib.net/api/get?artist_name=${encodeURIComponent(artist)}&track_name=${encodeURIComponent(title)}`,
+      { headers: { Accept: 'application/json' } }
+    );
+    if (lr.ok) {
+      const d = await lr.json();
+      const text = d?.syncedLyrics || d?.plainLyrics;
+      if (text && text.trim()) return text.trim();
+    }
+  } catch (e) { /* try fallback */ }
+
+  const res = await fetch(
+    `https://api.lyrics.ovh/v1/${encodeURIComponent(artist)}/${encodeURIComponent(title)}`
+  );
+  if (res.status === 404) throw new LyricsNotFound('No lyrics found for this song');
   if (!res.ok) throw new Error(`Lyrics API ${res.status}`);
   const data = await res.json();
-  if (!data.lyrics) throw new Error('No lyrics found');
+  if (!data.lyrics) throw new LyricsNotFound('No lyrics found for this song');
   return data.lyrics.trim();
 }
 
 export default function LyricsModal({ open, song, onClose }) {
   const [lyrics, setLyrics] = useState('');
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+  // status: '' | 'notfound' | 'unparseable' | 'error'
+  const [status, setStatus] = useState('');
 
   useEffect(() => {
     if (!open || !song) return;
     setLyrics('');
-    setError('');
+    setStatus('');
 
     const split = splitArtistTitle(song.title);
     if (!split) {
-      setError("Couldn't detect artist and title. Lyrics search needs an 'Artist - Title' format.");
+      setStatus('unparseable');
       return;
     }
 
@@ -61,8 +84,12 @@ export default function LyricsModal({ open, song, onClose }) {
         setLyrics(text);
         try { await AsyncStorage.setItem(cacheKey, text); } catch (e) {}
       } catch (e) {
-        reportError('lyrics', e, { song: song.title });
-        setError(e.message || 'Could not load lyrics');
+        if (e.code === 'NOT_FOUND') {
+          setStatus('notfound');
+        } else {
+          reportError('lyrics', e, { song: song.title });
+          setStatus('error');
+        }
       } finally {
         setLoading(false);
       }
@@ -85,10 +112,29 @@ export default function LyricsModal({ open, song, onClose }) {
               <ActivityIndicator size="large" color={theme.green} />
               <Text style={styles.statusText}>Searching lyrics...</Text>
             </View>
-          ) : error ? (
+          ) : status === 'notfound' ? (
             <View style={styles.center}>
-              <Ionicons name="document-text-outline" size={48} color={theme.textMuted} />
-              <Text style={styles.statusText}>{error}</Text>
+              <Ionicons name="musical-notes-outline" size={56} color={theme.textMuted} />
+              <Text style={styles.emptyTitle}>No lyrics found</Text>
+              <Text style={styles.emptyHint}>
+                We couldn't find lyrics for this track. It might be too new, an instrumental, or just not in our database yet.
+              </Text>
+            </View>
+          ) : status === 'unparseable' ? (
+            <View style={styles.center}>
+              <Ionicons name="search-outline" size={56} color={theme.textMuted} />
+              <Text style={styles.emptyTitle}>Can't search lyrics</Text>
+              <Text style={styles.emptyHint}>
+                The file name doesn't include an artist. Lyrics search works best with songs named like 'Artist - Title'.
+              </Text>
+            </View>
+          ) : status === 'error' ? (
+            <View style={styles.center}>
+              <Ionicons name="cloud-offline-outline" size={56} color={theme.textMuted} />
+              <Text style={styles.emptyTitle}>Couldn't load lyrics</Text>
+              <Text style={styles.emptyHint}>
+                Check your internet connection and try again.
+              </Text>
             </View>
           ) : (
             <ScrollView contentContainerStyle={styles.scroll}>
@@ -111,4 +157,6 @@ const styles = StyleSheet.create({
   lyrics: { color: theme.textPrimary, fontSize: 15, lineHeight: 24 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40 },
   statusText: { color: theme.textMuted, marginTop: 12, textAlign: 'center', fontSize: 13 },
+  emptyTitle: { color: theme.textPrimary, marginTop: 16, fontSize: 16, fontWeight: '700' },
+  emptyHint: { color: theme.textMuted, marginTop: 8, textAlign: 'center', fontSize: 13, lineHeight: 18, paddingHorizontal: 16 },
 });
