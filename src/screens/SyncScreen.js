@@ -5,6 +5,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../utils/theme';
 import { getPairing, setPairing, pairWith, planSync, runSync } from '../utils/sync';
+import QrScanner from '../components/QrScanner';
 
 export default function SyncScreen({ visible, onClose }) {
   const [pair, setPair] = useState(null);
@@ -15,6 +16,7 @@ export default function SyncScreen({ visible, onClose }) {
   const [plan, setPlan] = useState(null);
   const [progress, setProgress] = useState(null);
   const [result, setResult] = useState(null);
+  const [showScanner, setShowScanner] = useState(false);
 
   useEffect(() => {
     if (!visible) return;
@@ -25,10 +27,10 @@ export default function SyncScreen({ visible, onClose }) {
     getPairing().then(setPair);
   }, [visible]);
 
-  const onPair = async () => {
+  const pairUsing = async (addr, code) => {
     setLoading(true); setStatus('');
     try {
-      const p = await pairWith(address, pin);
+      const p = await pairWith(addr, code);
       setPair(p);
       setStatus(`Paired with ${p.name}`);
       setAddress(''); setPin('');
@@ -36,6 +38,15 @@ export default function SyncScreen({ visible, onClose }) {
       setStatus(e.message);
     }
     setLoading(false);
+  };
+
+  const onPair = () => pairUsing(address, pin);
+
+  const onScanned = ({ address: a, pin: p }) => {
+    setShowScanner(false);
+    setAddress(a);
+    setPin(p);
+    pairUsing(a, p);
   };
 
   const onUnpair = async () => {
@@ -90,9 +101,16 @@ export default function SyncScreen({ visible, onClose }) {
             <View>
               <Text style={styles.help}>
                 On your PC, open PlayFool and click the Sync icon in the sidebar.
-                Turn on "Allow sync on this network", then enter the address and PIN here.
+                Turn on "Allow sync on this network", then scan the QR code below
+                or enter the address and PIN by hand.
               </Text>
 
+              <TouchableOpacity onPress={() => setShowScanner(true)} style={styles.primary}>
+                <Ionicons name="qr-code" size={16} color="#000" />
+                <Text style={styles.primaryText}>Scan QR code</Text>
+              </TouchableOpacity>
+
+              <Text style={[styles.label, { marginTop: 16 }]}>Or enter manually:</Text>
               <Text style={styles.label}>PC address</Text>
               <TextInput
                 value={address}
@@ -204,6 +222,12 @@ export default function SyncScreen({ visible, onClose }) {
             </View>
           )}
         </ScrollView>
+
+        <QrScanner
+          visible={showScanner}
+          onClose={() => setShowScanner(false)}
+          onScan={onScanned}
+        />
       </View>
     </Modal>
   );
