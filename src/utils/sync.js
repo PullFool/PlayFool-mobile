@@ -130,7 +130,9 @@ async function uploadOne(pair, file) {
     uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
     headers: { 'Content-Type': 'application/octet-stream' },
   });
-  if (result.status >= 400) throw new Error(`Upload failed: ${result.status}`);
+  if (result.status >= 400) {
+    throw new Error(`HTTP ${result.status}: ${(result.body || '').slice(0, 200)}`);
+  }
   return result;
 }
 

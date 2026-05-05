@@ -179,9 +179,14 @@ export default function SyncScreen({ visible, onClose }) {
                     ✓ Synced {result.done - result.errors.length} of {result.total} song{result.total === 1 ? '' : 's'}
                   </Text>
                   {result.errors.length > 0 && (
-                    <Text style={styles.statusErr}>
-                      {result.errors.length} failed — try again
-                    </Text>
+                    <>
+                      <Text style={styles.statusErr}>
+                        {result.errors.length} failed — first error:
+                      </Text>
+                      <Text style={[styles.fileLine, { color: theme.red }]} numberOfLines={6}>
+                        [{result.errors[0].direction}] {result.errors[0].file}:{'\n'}{result.errors[0].error}
+                      </Text>
+                    </>
                   )}
                 </View>
               )}
