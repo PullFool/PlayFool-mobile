@@ -2,7 +2,7 @@
   "expo": {
     "name": "PlayFool",
     "slug": "playfool-mobile",
-    "version": "1.0.22",
+    "version": "1.0.23",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -26,8 +26,7 @@
         "REQUEST_INSTALL_PACKAGES",
         "FOREGROUND_SERVICE",
         "FOREGROUND_SERVICE_MEDIA_PLAYBACK",
-        "WAKE_LOCK",
-        "CAMERA"
+        "WAKE_LOCK"
       ]
     },
     "platforms": ["android"],
@@ -42,12 +41,6 @@
             "minSdkVersion": 23,
             "kotlinVersion": "1.9.24"
           }
-        }
-      ],
-      [
-        "expo-camera",
-        {
-          "cameraPermission": "PlayFool uses the camera to scan the sync QR code shown on your PC."
         }
       ]
     ]

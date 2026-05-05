@@ -37,9 +37,5 @@ allprojects {
         google()
         mavenCentral()
         maven { url 'https://www.jitpack.io' }
-        // JCenter is sunset but still serves legacy artifacts like
-        // com.google.android:cameraview:1.0.0 that expo-camera transitively
-        // pulls in. Required for the Android build to resolve.
-        maven { url 'https://jcenter.bintray.com' }
     }
 }

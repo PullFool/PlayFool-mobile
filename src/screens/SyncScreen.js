@@ -5,7 +5,20 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../utils/theme';
 import { getPairing, setPairing, pairWith, planSync, runSync } from '../utils/sync';
-import QrScanner from '../components/QrScanner';
+
+// Parse "playfool://pair?a=IP:PORT&p=PIN" pasted from a QR scanner app.
+function parsePairLink(text) {
+  if (!text || !text.startsWith('playfool://')) return null;
+  const q = text.indexOf('?');
+  if (q < 0) return null;
+  const out = { address: '', pin: '' };
+  for (const part of text.slice(q + 1).split('&')) {
+    const [k, v] = part.split('=');
+    if (k === 'a') out.address = decodeURIComponent(v || '');
+    if (k === 'p') out.pin = decodeURIComponent(v || '');
+  }
+  return out.address && out.pin ? out : null;
+}
 
 export default function SyncScreen({ visible, onClose }) {
   const [pair, setPair] = useState(null);
@@ -16,7 +29,6 @@ export default function SyncScreen({ visible, onClose }) {
   const [plan, setPlan] = useState(null);
   const [progress, setProgress] = useState(null);
   const [result, setResult] = useState(null);
-  const [showScanner, setShowScanner] = useState(false);
 
   useEffect(() => {
     if (!visible) return;
@@ -42,11 +54,17 @@ export default function SyncScreen({ visible, onClose }) {
 
   const onPair = () => pairUsing(address, pin);
 
-  const onScanned = ({ address: a, pin: p }) => {
-    setShowScanner(false);
-    setAddress(a);
-    setPin(p);
-    pairUsing(a, p);
+  // If the user pastes a full pair link into the address field, auto-fill
+  // both fields and trigger the pair flow.
+  const onAddressChange = (text) => {
+    const parsed = parsePairLink(text.trim());
+    if (parsed) {
+      setAddress(parsed.address);
+      setPin(parsed.pin);
+      pairUsing(parsed.address, parsed.pin);
+      return;
+    }
+    setAddress(text);
   };
 
   const onUnpair = async () => {
@@ -101,20 +119,16 @@ export default function SyncScreen({ visible, onClose }) {
             <View>
               <Text style={styles.help}>
                 On your PC, open PlayFool and click the Sync icon in the sidebar.
-                Turn on "Allow sync on this network", then scan the QR code below
-                or enter the address and PIN by hand.
+                Turn on "Allow sync on this network", then either type the
+                address and PIN below — or scan the QR code with any QR app
+                (Google Lens / camera) and paste the resulting link into
+                the address field.
               </Text>
 
-              <TouchableOpacity onPress={() => setShowScanner(true)} style={styles.primary}>
-                <Ionicons name="qr-code" size={16} color="#000" />
-                <Text style={styles.primaryText}>Scan QR code</Text>
-              </TouchableOpacity>
-
-              <Text style={[styles.label, { marginTop: 16 }]}>Or enter manually:</Text>
-              <Text style={styles.label}>PC address</Text>
+              <Text style={styles.label}>PC address (or paste pair link)</Text>
               <TextInput
                 value={address}
-                onChangeText={setAddress}
+                onChangeText={onAddressChange}
                 placeholder="192.168.1.5:3000"
                 placeholderTextColor={theme.textMuted}
                 autoCapitalize="none"
@@ -222,12 +236,6 @@ export default function SyncScreen({ visible, onClose }) {
             </View>
           )}
         </ScrollView>
-
-        <QrScanner
-          visible={showScanner}
-          onClose={() => setShowScanner(false)}
-          onScan={onScanned}
-        />
       </View>
     </Modal>
   );
