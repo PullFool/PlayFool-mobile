@@ -129,7 +129,9 @@ export default function Settings() {
         </View>
       </View>
 
-      <Text style={styles.footer}>Made by PullFool · v1.0.0</Text>
+      <Text style={styles.footer}>
+        Made by PullFool · v{Application.nativeApplicationVersion || 'dev'}
+      </Text>
 
       <SupportModal
         open={showSupport}
