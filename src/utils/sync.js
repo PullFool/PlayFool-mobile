@@ -101,12 +101,14 @@ export async function planSync(pair) {
   return { cloud, local, toDownload, toUpload };
 }
 
-async function downloadOne(pair, file) {
+async function downloadOne(pair, file, onBytes) {
   const tempDir = FileSystem.cacheDirectory + 'PlayFool-sync/';
   await FileSystem.makeDirectoryAsync(tempDir, { intermediates: true }).catch(() => {});
   const tempUri = tempDir + file.name;
   const url = `${pair.base}/v1/file/${file.id}?code=${encodeURIComponent(pair.code)}`;
-  const dl = FileSystem.createDownloadResumable(url, tempUri);
+  const dl = FileSystem.createDownloadResumable(url, tempUri, {}, (snap) => {
+    if (onBytes) onBytes(snap.totalBytesWritten, snap.totalBytesExpectedToWrite);
+  });
   const result = await dl.downloadAsync();
   if (!result?.uri) throw new Error('Download failed');
   const asset = await MediaLibrary.createAssetAsync(result.uri);
@@ -123,13 +125,21 @@ async function downloadOne(pair, file) {
   return asset;
 }
 
-async function uploadOne(pair, file) {
+async function uploadOne(pair, file, onBytes) {
   const url = `${pair.base}/v1/upload?code=${encodeURIComponent(pair.code)}&name=${encodeURIComponent(file.name)}&size=${file.size}`;
-  const result = await FileSystem.uploadAsync(url, file.uri, {
-    httpMethod: 'POST',
-    uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
-    headers: { 'Content-Type': 'application/octet-stream' },
-  });
+  const task = FileSystem.createUploadTask(
+    url,
+    file.uri,
+    {
+      httpMethod: 'POST',
+      uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+      headers: { 'Content-Type': 'application/octet-stream' },
+    },
+    (snap) => {
+      if (onBytes) onBytes(snap.totalByteSent, snap.totalBytesExpectedToSend);
+    }
+  );
+  const result = await task.uploadAsync();
   if (result.status >= 400) {
     throw new Error(`HTTP ${result.status}: ${(result.body || '').slice(0, 200)}`);
   }
@@ -140,23 +150,34 @@ export async function runSync(pair, plan, onProgress) {
   let done = 0;
   const total = plan.toDownload.length + plan.toUpload.length;
   const errors = [];
+  const tick = (extra) => {
+    if (onProgress) onProgress({ done, total, ...extra });
+  };
   for (const f of plan.toDownload) {
-    try { await downloadOne(pair, f); }
-    catch (e) {
+    tick({ current: f.name, dir: 'down', bytes: 0, totalBytes: f.size || 0 });
+    try {
+      await downloadOne(pair, f, (bytes, totalBytes) => {
+        tick({ current: f.name, dir: 'down', bytes, totalBytes });
+      });
+    } catch (e) {
       errors.push({ direction: 'down', file: f.name, error: e.message });
       reportError('sync.download', e, { file: f.name });
     }
     done++;
-    if (onProgress) onProgress({ done, total, current: f.name, dir: 'down' });
+    tick({ current: f.name, dir: 'down', bytes: f.size, totalBytes: f.size });
   }
   for (const f of plan.toUpload) {
-    try { await uploadOne(pair, f); }
-    catch (e) {
+    tick({ current: f.name, dir: 'up', bytes: 0, totalBytes: f.size });
+    try {
+      await uploadOne(pair, f, (bytes, totalBytes) => {
+        tick({ current: f.name, dir: 'up', bytes, totalBytes });
+      });
+    } catch (e) {
       errors.push({ direction: 'up', file: f.name, error: e.message });
       reportError('sync.upload', e, { file: f.name });
     }
     done++;
-    if (onProgress) onProgress({ done, total, current: f.name, dir: 'up' });
+    tick({ current: f.name, dir: 'up', bytes: f.size, totalBytes: f.size });
   }
   return { done, total, errors };
 }

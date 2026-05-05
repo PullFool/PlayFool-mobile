@@ -165,10 +165,22 @@ export default function SyncScreen({ visible, onClose }) {
               {progress && (
                 <View style={styles.section}>
                   <Text style={styles.sectionTitle}>
-                    {progress.dir === 'down' ? 'Downloading' : 'Uploading'} {progress.done} of {progress.total}
+                    {progress.dir === 'down' ? '⬇ Downloading' : '⬆ Uploading'} {progress.done + (progress.bytes < (progress.totalBytes || 0) ? 1 : 0)} of {progress.total}
                   </Text>
                   {!!progress.current && (
                     <Text style={styles.fileLine} numberOfLines={1}>{progress.current}</Text>
+                  )}
+                  {progress.totalBytes > 0 && (
+                    <>
+                      <View style={styles.progressTrack}>
+                        <View style={[styles.progressFill, { width: `${Math.min(100, Math.round((progress.bytes / progress.totalBytes) * 100))}%` }]} />
+                      </View>
+                      <Text style={styles.progressMeta}>
+                        {Math.min(100, Math.round((progress.bytes / progress.totalBytes) * 100))}%
+                        {' · '}
+                        {(progress.bytes / 1024 / 1024).toFixed(1)} / {(progress.totalBytes / 1024 / 1024).toFixed(1)} MB
+                      </Text>
+                    </>
                   )}
                 </View>
               )}
@@ -231,4 +243,10 @@ const styles = StyleSheet.create({
   section: { marginTop: 16, padding: 12, backgroundColor: theme.bgCard, borderRadius: 8 },
   sectionTitle: { color: theme.textPrimary, fontSize: 13, fontWeight: '700', marginBottom: 8 },
   fileLine: { color: theme.textSecondary, fontSize: 12, paddingVertical: 2 },
+  progressTrack: {
+    height: 4, borderRadius: 2, backgroundColor: theme.border,
+    overflow: 'hidden', marginTop: 8,
+  },
+  progressFill: { height: '100%', backgroundColor: theme.green },
+  progressMeta: { color: theme.textMuted, fontSize: 10, marginTop: 4, textAlign: 'right' },
 });
