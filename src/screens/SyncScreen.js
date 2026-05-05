@@ -5,13 +5,10 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../utils/theme';
 import { getPairing, setPairing, pairWith, planSync, runSync } from '../utils/sync';
-import { startDiscovery, stopDiscovery, pickAddress } from '../utils/discovery';
 
 export default function SyncScreen({ visible, onClose }) {
   const [pair, setPair] = useState(null);
-  const [services, setServices] = useState([]);
-  const [pickedSvc, setPickedSvc] = useState(null);
-  const [pin, setPin] = useState('');
+  const [code, setCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
   const [plan, setPlan] = useState(null);
@@ -24,51 +21,24 @@ export default function SyncScreen({ visible, onClose }) {
     setPlan(null);
     setProgress(null);
     setResult(null);
-    setPickedSvc(null);
-    setPin('');
+    setCode('');
     getPairing().then(setPair);
   }, [visible]);
 
-  // Run mDNS discovery only while we're showing the pairing UI.
-  useEffect(() => {
-    if (!visible) return;
-    if (pair) return; // already paired — no need to scan
-    setServices([]);
-    const stop = startDiscovery(setServices);
-    return () => { stop(); stopDiscovery(); };
-  }, [visible, pair]);
-
-  const pickService = (svc) => {
-    setPickedSvc(svc);
-    setStatus('');
-    setPin('');
-  };
-
-  const onConnect = async () => {
-    if (!pickedSvc || !pin) {
-      setStatus('Enter the PIN shown on your PC.');
-      return;
-    }
-    const ip = pickAddress(pickedSvc);
-    if (!ip) { setStatus("Couldn't read the PC's IP — try another device."); return; }
+  const onPair = async () => {
     setLoading(true); setStatus('');
     try {
-      const p = await pairWith(`${ip}:${pickedSvc.port}`, pin);
+      const p = await pairWith(code);
       setPair(p);
-      setStatus(`Paired with ${p.name}`);
-      setPickedSvc(null);
-      setPin('');
-    } catch (e) {
-      setStatus(e.message);
-    }
+      setStatus('Connected');
+      setCode('');
+    } catch (e) { setStatus(e.message); }
     setLoading(false);
   };
 
   const onUnpair = async () => {
     await setPairing(null);
-    setPair(null);
-    setStatus('');
-    setPlan(null);
+    setPair(null); setStatus(''); setPlan(null);
   };
 
   const onPlan = async () => {
@@ -86,7 +56,8 @@ export default function SyncScreen({ visible, onClose }) {
 
   const onSync = async () => {
     if (!pair || !plan) return;
-    setLoading(true); setProgress({ done: 0, total: plan.toDownload.length + plan.toUpload.length });
+    setLoading(true);
+    setProgress({ done: 0, total: plan.toDownload.length + plan.toUpload.length });
     try {
       const r = await runSync(pair, plan, setProgress);
       setResult(r);
@@ -111,85 +82,39 @@ export default function SyncScreen({ visible, onClose }) {
           {!pair ? (
             <View>
               <Text style={styles.help}>
-                Make sure PlayFool is open on your PC and "Allow sync on this network"
-                is on. Your PC will appear below automatically.
+                On your PC, open PlayFool → Sync. It shows a code. Type the same code
+                here to connect. Both devices just need internet — they don't have to
+                be on the same Wi-Fi.
               </Text>
 
-              {!pickedSvc ? (
-                <View style={styles.discoverBox}>
-                  <View style={styles.discoverHeader}>
-                    <ActivityIndicator size="small" color={theme.green} />
-                    <Text style={styles.discoverHeaderText}>
-                      {services.length > 0
-                        ? `Found ${services.length} PC${services.length === 1 ? '' : 's'}`
-                        : 'Scanning for nearby PCs...'}
-                    </Text>
-                  </View>
+              <Text style={styles.label}>Sync code</Text>
+              <TextInput
+                value={code}
+                onChangeText={(v) => setCode(v.toUpperCase())}
+                placeholder="ABC123"
+                placeholderTextColor={theme.textMuted}
+                autoCapitalize="characters"
+                maxLength={16}
+                style={[styles.input, { letterSpacing: 4, fontSize: 18, fontWeight: '700' }]}
+              />
 
-                  {services.length === 0 ? (
-                    <Text style={styles.discoverHint}>
-                      No PCs found yet. Make sure both devices are on the same Wi-Fi.
-                    </Text>
-                  ) : (
-                    services.map((svc) => (
-                      <TouchableOpacity
-                        key={svc.name}
-                        onPress={() => pickService(svc)}
-                        style={styles.serviceRow}
-                      >
-                        <Ionicons name="desktop" size={20} color={theme.green} />
-                        <View style={{ flex: 1 }}>
-                          <Text style={styles.serviceName} numberOfLines={1}>{svc.name}</Text>
-                          <Text style={styles.serviceMeta}>
-                            {pickAddress(svc)}:{svc.port}
-                          </Text>
-                        </View>
-                        <Ionicons name="chevron-forward" size={20} color={theme.textMuted} />
-                      </TouchableOpacity>
-                    ))
-                  )}
-                </View>
-              ) : (
-                <View style={styles.discoverBox}>
-                  <Text style={styles.serviceName}>{pickedSvc.name}</Text>
-                  <Text style={styles.serviceMeta}>
-                    {pickAddress(pickedSvc)}:{pickedSvc.port}
-                  </Text>
-
-                  <Text style={[styles.label, { marginTop: 16 }]}>Enter PIN shown on your PC</Text>
-                  <TextInput
-                    value={pin}
-                    onChangeText={(v) => setPin(v.toUpperCase())}
-                    placeholder="ABC123"
-                    placeholderTextColor={theme.textMuted}
-                    autoCapitalize="characters"
-                    maxLength={6}
-                    style={[styles.input, { letterSpacing: 4, fontSize: 18, fontWeight: '700' }]}
-                  />
-
-                  <TouchableOpacity onPress={onConnect} disabled={loading} style={styles.primary}>
-                    {loading ? <ActivityIndicator color="#000" /> : <Ionicons name="link" size={16} color="#000" />}
-                    <Text style={styles.primaryText}>Connect</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity onPress={() => setPickedSvc(null)} style={{ marginTop: 8, alignItems: 'center' }}>
-                    <Text style={styles.linkText}>Pick a different PC</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
+              <TouchableOpacity onPress={onPair} disabled={loading} style={styles.primary}>
+                {loading ? <ActivityIndicator color="#000" /> : <Ionicons name="link" size={16} color="#000" />}
+                <Text style={styles.primaryText}>Connect</Text>
+              </TouchableOpacity>
 
               {!!status && <Text style={styles.statusErr}>{status}</Text>}
             </View>
           ) : (
             <View>
               <View style={styles.pairBox}>
-                <Ionicons name="checkmark-circle" size={20} color={theme.green} />
+                <Ionicons name="cloud" size={20} color={theme.green} />
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.pairTitle}>Paired with {pair.name}</Text>
-                  <Text style={styles.pairSub}>{pair.base.replace(/^https?:\/\//, '')}</Text>
+                  <Text style={styles.pairTitle}>Connected</Text>
+                  <Text style={styles.pairSub}>Code: {pair.code}</Text>
                 </View>
                 <TouchableOpacity onPress={onUnpair} hitSlop={8}>
-                  <Text style={styles.unpair}>Unpair</Text>
+                  <Text style={styles.unpair}>Disconnect</Text>
                 </TouchableOpacity>
               </View>
 
@@ -207,10 +132,10 @@ export default function SyncScreen({ visible, onClose }) {
                   {plan.toDownload.length > 0 && (
                     <View style={styles.section}>
                       <Text style={styles.sectionTitle}>
-                        ⬇ Download from PC ({plan.toDownload.length})
+                        ⬇ Download ({plan.toDownload.length})
                       </Text>
                       {plan.toDownload.map((f) => (
-                        <Text key={f.name} style={styles.fileLine} numberOfLines={1}>
+                        <Text key={f.id} style={styles.fileLine} numberOfLines={1}>
                           {f.name}  ({(f.size / 1024 / 1024).toFixed(1)} MB)
                         </Text>
                       ))}
@@ -219,7 +144,7 @@ export default function SyncScreen({ visible, onClose }) {
                   {plan.toUpload.length > 0 && (
                     <View style={styles.section}>
                       <Text style={styles.sectionTitle}>
-                        ⬆ Upload to PC ({plan.toUpload.length})
+                        ⬆ Upload ({plan.toUpload.length})
                       </Text>
                       {plan.toUpload.map((f) => (
                         <Text key={f.name} style={styles.fileLine} numberOfLines={1}>
@@ -255,7 +180,7 @@ export default function SyncScreen({ visible, onClose }) {
                   </Text>
                   {result.errors.length > 0 && (
                     <Text style={styles.statusErr}>
-                      {result.errors.length} failed — check your connection and try again
+                      {result.errors.length} failed — try again
                     </Text>
                   )}
                 </View>
@@ -288,7 +213,6 @@ const styles = StyleSheet.create({
     borderRadius: 24, marginTop: 16,
   },
   primaryText: { color: '#000', fontWeight: '700', fontSize: 14 },
-  linkText: { color: theme.green, fontSize: 12, fontWeight: '600' },
   status: { color: theme.textSecondary, fontSize: 13, marginTop: 12, textAlign: 'center' },
   statusErr: { color: theme.red, fontSize: 13, marginTop: 12, textAlign: 'center' },
   pairBox: {
@@ -302,20 +226,4 @@ const styles = StyleSheet.create({
   section: { marginTop: 16, padding: 12, backgroundColor: theme.bgCard, borderRadius: 8 },
   sectionTitle: { color: theme.textPrimary, fontSize: 13, fontWeight: '700', marginBottom: 8 },
   fileLine: { color: theme.textSecondary, fontSize: 12, paddingVertical: 2 },
-  discoverBox: {
-    backgroundColor: theme.bgCard, borderRadius: 8, padding: 12,
-    borderWidth: 1, borderColor: theme.border, marginBottom: 8,
-  },
-  discoverHeader: {
-    flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8,
-  },
-  discoverHeaderText: { color: theme.textPrimary, fontSize: 13, fontWeight: '700' },
-  discoverHint: { color: theme.textMuted, fontSize: 12, lineHeight: 17 },
-  serviceRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.border,
-  },
-  serviceName: { color: theme.textPrimary, fontSize: 14, fontWeight: '700' },
-  serviceMeta: { color: theme.textMuted, fontSize: 11 },
 });
