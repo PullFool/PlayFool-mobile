@@ -52,7 +52,9 @@ export async function searchMusic(query, limit = 30) {
 }
 
 export async function getAudioStreamUrl(videoId) {
-  const data = await apiGet(`/stream/${videoId}`, 15000);
+  // 30s — server walks several yt-dlp player clients in parallel and may
+  // legitimately need longer than the default 12s on a cold Railway dyno.
+  const data = await apiGet(`/stream/${videoId}`, 30000);
   const url = data?.url || data?.audio || null;
   if (!url) throw new Error('No playable audio stream returned by API');
   return url;
