@@ -3,7 +3,7 @@
 import * as FileSystem from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
 
-const API_BASE = 'https://adrianborboran.up.railway.app/api/yt';
+const API_BASE = 'https://playfool-api-production.up.railway.app/api/yt';
 const DEFAULT_TIMEOUT = 12000; // generous so a Railway cold-start can finish
 
 async function fetchWithTimeout(url, init = {}, timeoutMs = DEFAULT_TIMEOUT) {

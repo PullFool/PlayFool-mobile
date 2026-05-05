@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, Modal, ScrollView, StyleSheet, ActivityIndicator,
 } from 'react-native';
@@ -14,6 +14,7 @@ export default function SyncScreen({ visible, onClose }) {
   const [plan, setPlan] = useState(null);
   const [progress, setProgress] = useState(null);
   const [result, setResult] = useState(null);
+  const cancelRef = useRef(false);
 
   useEffect(() => {
     if (!visible) return;
@@ -56,15 +57,21 @@ export default function SyncScreen({ visible, onClose }) {
 
   const onSync = async () => {
     if (!pair || !plan) return;
+    cancelRef.current = false;
     setLoading(true);
     setProgress({ done: 0, total: plan.toDownload.length + plan.toUpload.length });
     try {
-      const r = await runSync(pair, plan, setProgress);
+      const r = await runSync(pair, plan, setProgress, () => cancelRef.current);
       setResult(r);
       setPlan(null);
     } catch (e) { setStatus(e.message); }
     setLoading(false);
     setProgress(null);
+  };
+
+  const onCancel = () => {
+    cancelRef.current = true;
+    setStatus('Cancelling — finishing current file...');
   };
 
   return (
@@ -182,6 +189,10 @@ export default function SyncScreen({ visible, onClose }) {
                       </Text>
                     </>
                   )}
+                  <TouchableOpacity onPress={onCancel} style={styles.cancelBtn}>
+                    <Ionicons name="close-circle-outline" size={14} color={theme.red} />
+                    <Text style={styles.cancelText}>Stop sync</Text>
+                  </TouchableOpacity>
                 </View>
               )}
 
@@ -249,4 +260,10 @@ const styles = StyleSheet.create({
   },
   progressFill: { height: '100%', backgroundColor: theme.green },
   progressMeta: { color: theme.textMuted, fontSize: 10, marginTop: 4, textAlign: 'right' },
+  cancelBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    marginTop: 12, paddingVertical: 8, borderRadius: 16,
+    borderWidth: 1, borderColor: theme.red,
+  },
+  cancelText: { color: theme.red, fontSize: 12, fontWeight: '700' },
 });

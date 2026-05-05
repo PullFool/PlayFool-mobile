@@ -89,15 +89,25 @@ async function listCloud(pair) {
   return data.files || [];
 }
 
-// Diff: cloud-only → toDownload; local-only → toUpload. Same name+size = skip.
+// Match songs by base name (extension stripped, normalized) so the same
+// song stored as .mp3 on one device and .m4a on another isn't duplicated.
+function songKey(name) {
+  if (!name) return '';
+  return String(name)
+    .replace(/\.[^.]+$/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+// Diff: cloud-only → toDownload; local-only → toUpload. Match by song name.
 export async function planSync(pair) {
   const cloud = await listCloud(pair);
   const local = await listLocal();
-  const key = (f) => `${f.name}|${f.size}`;
-  const localSet = new Set(local.map(key));
-  const cloudSet = new Set(cloud.map(key));
-  const toDownload = cloud.filter((f) => !localSet.has(key(f)));
-  const toUpload = local.filter((f) => !cloudSet.has(key(f)));
+  const localSet = new Set(local.map((f) => songKey(f.name)));
+  const cloudSet = new Set(cloud.map((f) => songKey(f.name)));
+  const toDownload = cloud.filter((f) => !localSet.has(songKey(f.name)));
+  const toUpload = local.filter((f) => !cloudSet.has(songKey(f.name)));
   return { cloud, local, toDownload, toUpload };
 }
 
@@ -146,14 +156,16 @@ async function uploadOne(pair, file, onBytes) {
   return result;
 }
 
-export async function runSync(pair, plan, onProgress) {
+export async function runSync(pair, plan, onProgress, isCancelled) {
   let done = 0;
   const total = plan.toDownload.length + plan.toUpload.length;
   const errors = [];
+  let cancelled = false;
   const tick = (extra) => {
     if (onProgress) onProgress({ done, total, ...extra });
   };
   for (const f of plan.toDownload) {
+    if (isCancelled && isCancelled()) { cancelled = true; break; }
     tick({ current: f.name, dir: 'down', bytes: 0, totalBytes: f.size || 0 });
     try {
       await downloadOne(pair, f, (bytes, totalBytes) => {
@@ -167,6 +179,7 @@ export async function runSync(pair, plan, onProgress) {
     tick({ current: f.name, dir: 'down', bytes: f.size, totalBytes: f.size });
   }
   for (const f of plan.toUpload) {
+    if (isCancelled && isCancelled()) { cancelled = true; break; }
     tick({ current: f.name, dir: 'up', bytes: 0, totalBytes: f.size });
     try {
       await uploadOne(pair, f, (bytes, totalBytes) => {
@@ -179,5 +192,5 @@ export async function runSync(pair, plan, onProgress) {
     done++;
     tick({ current: f.name, dir: 'up', bytes: f.size, totalBytes: f.size });
   }
-  return { done, total, errors };
+  return { done, total, errors, cancelled };
 }
