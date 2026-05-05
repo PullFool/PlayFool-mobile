@@ -114,7 +114,11 @@ export async function planSync(pair) {
 async function downloadOne(pair, file, onBytes) {
   const tempDir = FileSystem.cacheDirectory + 'PlayFool-sync/';
   await FileSystem.makeDirectoryAsync(tempDir, { intermediates: true }).catch(() => {});
-  const tempUri = tempDir + file.name;
+  // Strip any path separators or weird chars from the server-provided name —
+  // older R2 entries can have a name that's actually the full "code/id" key,
+  // which Android's downloader interprets as a missing subdirectory.
+  const safeName = String(file.name || file.id || 'song').split(/[\/\\]/).pop().replace(/[^\w.\- ()]/g, '_') || 'song';
+  const tempUri = tempDir + safeName;
   const url = `${pair.base}/v1/file/${file.id}?code=${encodeURIComponent(pair.code)}`;
   const dl = FileSystem.createDownloadResumable(url, tempUri, {}, (snap) => {
     if (onBytes) onBytes(snap.totalBytesWritten, snap.totalBytesExpectedToWrite);
@@ -125,7 +129,10 @@ async function downloadOne(pair, file, onBytes) {
   try {
     let album = await MediaLibrary.getAlbumAsync(ALBUM_NAME);
     if (!album) album = await MediaLibrary.createAlbumAsync(ALBUM_NAME, asset, false);
-    else await MediaLibrary.addAssetsToAlbumAsync([asset], album, false);
+    // copy=true avoids Android 11+'s "allow modify" permission dialog that
+    // pops up on every move. The asset is referenced by the album, not
+    // physically duplicated, on modern Android.
+    else await MediaLibrary.addAssetsToAlbumAsync([asset], album, true);
   } catch (e) {}
   try { await FileSystem.deleteAsync(result.uri, { idempotent: true }); } catch (e) {}
   // Tell the relay it's safe to delete the cloud copy.

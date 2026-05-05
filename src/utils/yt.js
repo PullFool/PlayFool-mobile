@@ -103,7 +103,8 @@ export async function downloadAudio(video, onProgress) {
     if (!album) {
       album = await MediaLibrary.createAlbumAsync(ALBUM_NAME, asset, false);
     } else {
-      await MediaLibrary.addAssetsToAlbumAsync([asset], album, false);
+      // copy=true avoids Android 11+'s "allow modify" permission dialog.
+      await MediaLibrary.addAssetsToAlbumAsync([asset], album, true);
     }
   } catch (e) {
     // Album organization is best-effort. The file still ends up in /Music/.

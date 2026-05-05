@@ -54,6 +54,17 @@ export default function Settings() {
         </Text>
       </View>
 
+      <View style={[styles.section, { borderColor: theme.red, borderWidth: 1 }]}>
+        <Text style={[styles.label, { color: theme.red }]}>⚠ Before uninstalling</Text>
+        <Text style={styles.help}>
+          Android automatically deletes audio files PlayFool created when the app
+          is uninstalled — this is a system-level behavior we can't override.
+          {'\n\n'}
+          To keep your library: open Sync and back up your songs to your PC first.
+          Reinstall later, sync again, library restored.
+        </Text>
+      </View>
+
       {EQ_AVAILABLE ? (
         <View style={styles.section}>
           <Text style={styles.label}>Equalizer</Text>
