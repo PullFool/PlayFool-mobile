@@ -5,24 +5,12 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { theme } from '../utils/theme';
 import { getPairing, setPairing, pairWith, planSync, runSync } from '../utils/sync';
-
-// Parse "playfool://pair?a=IP:PORT&p=PIN" pasted from a QR scanner app.
-function parsePairLink(text) {
-  if (!text || !text.startsWith('playfool://')) return null;
-  const q = text.indexOf('?');
-  if (q < 0) return null;
-  const out = { address: '', pin: '' };
-  for (const part of text.slice(q + 1).split('&')) {
-    const [k, v] = part.split('=');
-    if (k === 'a') out.address = decodeURIComponent(v || '');
-    if (k === 'p') out.pin = decodeURIComponent(v || '');
-  }
-  return out.address && out.pin ? out : null;
-}
+import { startDiscovery, stopDiscovery, pickAddress } from '../utils/discovery';
 
 export default function SyncScreen({ visible, onClose }) {
   const [pair, setPair] = useState(null);
-  const [address, setAddress] = useState('');
+  const [services, setServices] = useState([]);
+  const [pickedSvc, setPickedSvc] = useState(null);
   const [pin, setPin] = useState('');
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('');
@@ -36,35 +24,44 @@ export default function SyncScreen({ visible, onClose }) {
     setPlan(null);
     setProgress(null);
     setResult(null);
+    setPickedSvc(null);
+    setPin('');
     getPairing().then(setPair);
   }, [visible]);
 
-  const pairUsing = async (addr, code) => {
+  // Run mDNS discovery only while we're showing the pairing UI.
+  useEffect(() => {
+    if (!visible) return;
+    if (pair) return; // already paired — no need to scan
+    setServices([]);
+    const stop = startDiscovery(setServices);
+    return () => { stop(); stopDiscovery(); };
+  }, [visible, pair]);
+
+  const pickService = (svc) => {
+    setPickedSvc(svc);
+    setStatus('');
+    setPin('');
+  };
+
+  const onConnect = async () => {
+    if (!pickedSvc || !pin) {
+      setStatus('Enter the PIN shown on your PC.');
+      return;
+    }
+    const ip = pickAddress(pickedSvc);
+    if (!ip) { setStatus("Couldn't read the PC's IP — try another device."); return; }
     setLoading(true); setStatus('');
     try {
-      const p = await pairWith(addr, code);
+      const p = await pairWith(`${ip}:${pickedSvc.port}`, pin);
       setPair(p);
       setStatus(`Paired with ${p.name}`);
-      setAddress(''); setPin('');
+      setPickedSvc(null);
+      setPin('');
     } catch (e) {
       setStatus(e.message);
     }
     setLoading(false);
-  };
-
-  const onPair = () => pairUsing(address, pin);
-
-  // If the user pastes a full pair link into the address field, auto-fill
-  // both fields and trigger the pair flow.
-  const onAddressChange = (text) => {
-    const parsed = parsePairLink(text.trim());
-    if (parsed) {
-      setAddress(parsed.address);
-      setPin(parsed.pin);
-      pairUsing(parsed.address, parsed.pin);
-      return;
-    }
-    setAddress(text);
   };
 
   const onUnpair = async () => {
@@ -83,9 +80,7 @@ export default function SyncScreen({ visible, onClose }) {
       if (!p.toDownload.length && !p.toUpload.length) {
         setStatus('Already in sync — nothing to transfer.');
       }
-    } catch (e) {
-      setStatus(e.message);
-    }
+    } catch (e) { setStatus(e.message); }
     setLoading(false);
   };
 
@@ -96,9 +91,7 @@ export default function SyncScreen({ visible, onClose }) {
       const r = await runSync(pair, plan, setProgress);
       setResult(r);
       setPlan(null);
-    } catch (e) {
-      setStatus(e.message);
-    }
+    } catch (e) { setStatus(e.message); }
     setLoading(false);
     setProgress(null);
   };
@@ -118,38 +111,72 @@ export default function SyncScreen({ visible, onClose }) {
           {!pair ? (
             <View>
               <Text style={styles.help}>
-                On your PC, open PlayFool and click the Sync icon in the sidebar.
-                Turn on "Allow sync on this network", then either type the
-                address and PIN below — or scan the QR code with any QR app
-                (Google Lens / camera) and paste the resulting link into
-                the address field.
+                Make sure PlayFool is open on your PC and "Allow sync on this network"
+                is on. Your PC will appear below automatically.
               </Text>
 
-              <Text style={styles.label}>PC address (or paste pair link)</Text>
-              <TextInput
-                value={address}
-                onChangeText={onAddressChange}
-                placeholder="192.168.1.5:3000"
-                placeholderTextColor={theme.textMuted}
-                autoCapitalize="none"
-                style={styles.input}
-              />
+              {!pickedSvc ? (
+                <View style={styles.discoverBox}>
+                  <View style={styles.discoverHeader}>
+                    <ActivityIndicator size="small" color={theme.green} />
+                    <Text style={styles.discoverHeaderText}>
+                      {services.length > 0
+                        ? `Found ${services.length} PC${services.length === 1 ? '' : 's'}`
+                        : 'Scanning for nearby PCs...'}
+                    </Text>
+                  </View>
 
-              <Text style={styles.label}>PIN</Text>
-              <TextInput
-                value={pin}
-                onChangeText={(v) => setPin(v.toUpperCase())}
-                placeholder="ABC123"
-                placeholderTextColor={theme.textMuted}
-                autoCapitalize="characters"
-                maxLength={6}
-                style={[styles.input, { letterSpacing: 4, fontSize: 18, fontWeight: '700' }]}
-              />
+                  {services.length === 0 ? (
+                    <Text style={styles.discoverHint}>
+                      No PCs found yet. Make sure both devices are on the same Wi-Fi.
+                    </Text>
+                  ) : (
+                    services.map((svc) => (
+                      <TouchableOpacity
+                        key={svc.name}
+                        onPress={() => pickService(svc)}
+                        style={styles.serviceRow}
+                      >
+                        <Ionicons name="desktop" size={20} color={theme.green} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.serviceName} numberOfLines={1}>{svc.name}</Text>
+                          <Text style={styles.serviceMeta}>
+                            {pickAddress(svc)}:{svc.port}
+                          </Text>
+                        </View>
+                        <Ionicons name="chevron-forward" size={20} color={theme.textMuted} />
+                      </TouchableOpacity>
+                    ))
+                  )}
+                </View>
+              ) : (
+                <View style={styles.discoverBox}>
+                  <Text style={styles.serviceName}>{pickedSvc.name}</Text>
+                  <Text style={styles.serviceMeta}>
+                    {pickAddress(pickedSvc)}:{pickedSvc.port}
+                  </Text>
 
-              <TouchableOpacity onPress={onPair} disabled={loading} style={styles.primary}>
-                {loading ? <ActivityIndicator color="#000" /> : <Ionicons name="link" size={16} color="#000" />}
-                <Text style={styles.primaryText}>Connect</Text>
-              </TouchableOpacity>
+                  <Text style={[styles.label, { marginTop: 16 }]}>Enter PIN shown on your PC</Text>
+                  <TextInput
+                    value={pin}
+                    onChangeText={(v) => setPin(v.toUpperCase())}
+                    placeholder="ABC123"
+                    placeholderTextColor={theme.textMuted}
+                    autoCapitalize="characters"
+                    maxLength={6}
+                    style={[styles.input, { letterSpacing: 4, fontSize: 18, fontWeight: '700' }]}
+                  />
+
+                  <TouchableOpacity onPress={onConnect} disabled={loading} style={styles.primary}>
+                    {loading ? <ActivityIndicator color="#000" /> : <Ionicons name="link" size={16} color="#000" />}
+                    <Text style={styles.primaryText}>Connect</Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity onPress={() => setPickedSvc(null)} style={{ marginTop: 8, alignItems: 'center' }}>
+                    <Text style={styles.linkText}>Pick a different PC</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
 
               {!!status && <Text style={styles.statusErr}>{status}</Text>}
             </View>
@@ -261,6 +288,7 @@ const styles = StyleSheet.create({
     borderRadius: 24, marginTop: 16,
   },
   primaryText: { color: '#000', fontWeight: '700', fontSize: 14 },
+  linkText: { color: theme.green, fontSize: 12, fontWeight: '600' },
   status: { color: theme.textSecondary, fontSize: 13, marginTop: 12, textAlign: 'center' },
   statusErr: { color: theme.red, fontSize: 13, marginTop: 12, textAlign: 'center' },
   pairBox: {
@@ -274,4 +302,20 @@ const styles = StyleSheet.create({
   section: { marginTop: 16, padding: 12, backgroundColor: theme.bgCard, borderRadius: 8 },
   sectionTitle: { color: theme.textPrimary, fontSize: 13, fontWeight: '700', marginBottom: 8 },
   fileLine: { color: theme.textSecondary, fontSize: 12, paddingVertical: 2 },
+  discoverBox: {
+    backgroundColor: theme.bgCard, borderRadius: 8, padding: 12,
+    borderWidth: 1, borderColor: theme.border, marginBottom: 8,
+  },
+  discoverHeader: {
+    flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8,
+  },
+  discoverHeaderText: { color: theme.textPrimary, fontSize: 13, fontWeight: '700' },
+  discoverHint: { color: theme.textMuted, fontSize: 12, lineHeight: 17 },
+  serviceRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingVertical: 10, borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.border,
+  },
+  serviceName: { color: theme.textPrimary, fontSize: 14, fontWeight: '700' },
+  serviceMeta: { color: theme.textMuted, fontSize: 11 },
 });
