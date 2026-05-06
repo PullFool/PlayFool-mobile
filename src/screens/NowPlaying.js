@@ -71,40 +71,57 @@ async function loadLyricsForSong(song) {
   if (!split) return { status: 'unparseable' };
   const key = songKey(split.artist, split.title);
   const rejected = await loadRejected(key);
+
+  // Fetch lrclib results — `/api/get` is the precise endpoint that returns
+  // a single match by exact artist+track. We start with it for accuracy,
+  // then fall back to `/api/search` for fuzzy matches when get returns 404.
+  let results = [];
   try {
-    const q = `${split.title} ${split.artist}`.trim();
-    const res = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(q)}`, {
-      headers: { Accept: 'application/json' },
-    });
-    if (!res.ok) return { status: 'notfound' };
-    const results = await res.json();
-    if (!Array.isArray(results) || results.length === 0) return { status: 'notfound' };
-    const rejectedSet = new Set((rejected || []).map(String));
-    const eligible = results
-      .map((r, i) => ({ ...r, _index: i }))
-      .filter((r) => !rejectedSet.has(String(r.id)));
-    if (!eligible.length) return { status: rejected.length ? 'noMore' : 'notfound' };
-    const pick = eligible.find((r) => r.syncedLyrics) || eligible[0];
-    // Prefer synced — we parse the [mm:ss.xx]Line format into timed lines
-    // and render them karaoke-style. Fall back to plain text only when
-    // synced isn't available.
-    const synced = pick.syncedLyrics ? parseSyncedLyrics(pick.syncedLyrics) : null;
-    const plain = pick.plainLyrics
-      || (pick.syncedLyrics && pick.syncedLyrics.replace(/\[\d+:\d+\.\d+\]/g, '').trim())
-      || '';
-    if (!synced && !plain) return { status: 'notfound' };
-    return {
-      status: 'ok',
-      lines: synced || null,
-      text: plain,
-      sourceId: String(pick.id),
-      total: results.length,
-      current: pick._index + 1,
-      songKey: key,
-    };
-  } catch (e) {
-    return { status: 'error' };
+    const r1 = await fetch(
+      `https://lrclib.net/api/get?artist_name=${encodeURIComponent(split.artist)}&track_name=${encodeURIComponent(split.title)}`,
+      { headers: { Accept: 'application/json' } },
+    );
+    if (r1.ok) {
+      const one = await r1.json();
+      if (one && one.id) results = [one];
+    }
+  } catch (e) {}
+  if (results.length === 0) {
+    try {
+      const q = `${split.title} ${split.artist}`.trim();
+      const r2 = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(q)}`, {
+        headers: { Accept: 'application/json' },
+      });
+      if (r2.ok) {
+        const arr = await r2.json();
+        if (Array.isArray(arr)) results = arr;
+      }
+    } catch (e) {
+      return { status: 'error' };
+    }
   }
+  if (results.length === 0) return { status: 'notfound' };
+
+  const rejectedSet = new Set((rejected || []).map(String));
+  const eligible = results
+    .map((r, i) => ({ ...r, _index: i }))
+    .filter((r) => !rejectedSet.has(String(r.id)));
+  if (!eligible.length) return { status: rejected.length ? 'noMore' : 'notfound' };
+  const pick = eligible.find((r) => r.syncedLyrics) || eligible[0];
+  const synced = pick.syncedLyrics ? parseSyncedLyrics(pick.syncedLyrics) : null;
+  const plain = pick.plainLyrics
+    || (pick.syncedLyrics && pick.syncedLyrics.replace(/\[\d+:\d+\.\d+\]/g, '').trim())
+    || '';
+  if (!synced && !plain) return { status: 'notfound' };
+  return {
+    status: 'ok',
+    lines: synced || null,
+    text: plain,
+    sourceId: String(pick.id),
+    total: results.length,
+    current: pick._index + 1,
+    songKey: key,
+  };
 }
 
 // Karaoke-style synced lyric renderer. Highlights the current line based
