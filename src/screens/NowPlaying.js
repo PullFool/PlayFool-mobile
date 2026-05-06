@@ -50,6 +50,22 @@ async function saveRejected(key, ids) {
   } catch (e) {}
 }
 
+// Convert "[mm:ss.xx]Lyric line" lrclib output into [{ time, text }].
+function parseSyncedLyrics(lrc) {
+  const out = [];
+  for (const raw of String(lrc).split('\n')) {
+    const m = raw.match(/^\[(\d{2}):(\d{2})\.(\d{2,3})\](.*)$/);
+    if (!m) continue;
+    const minutes = parseInt(m[1], 10);
+    const seconds = parseInt(m[2], 10);
+    const ms = parseInt(m[3].padEnd(3, '0'), 10);
+    const time = minutes * 60 + seconds + ms / 1000;
+    const text = m[4].trim();
+    if (text) out.push({ time, text });
+  }
+  return out.length ? out : null;
+}
+
 async function loadLyricsForSong(song) {
   const split = splitArtistTitle(song.title);
   if (!split) return { status: 'unparseable' };
@@ -69,13 +85,18 @@ async function loadLyricsForSong(song) {
       .filter((r) => !rejectedSet.has(String(r.id)));
     if (!eligible.length) return { status: rejected.length ? 'noMore' : 'notfound' };
     const pick = eligible.find((r) => r.syncedLyrics) || eligible[0];
-    const text = pick.plainLyrics
+    // Prefer synced — we parse the [mm:ss.xx]Line format into timed lines
+    // and render them karaoke-style. Fall back to plain text only when
+    // synced isn't available.
+    const synced = pick.syncedLyrics ? parseSyncedLyrics(pick.syncedLyrics) : null;
+    const plain = pick.plainLyrics
       || (pick.syncedLyrics && pick.syncedLyrics.replace(/\[\d+:\d+\.\d+\]/g, '').trim())
       || '';
-    if (!text) return { status: 'notfound' };
+    if (!synced && !plain) return { status: 'notfound' };
     return {
       status: 'ok',
-      text,
+      lines: synced || null,
+      text: plain,
       sourceId: String(pick.id),
       total: results.length,
       current: pick._index + 1,
@@ -84,6 +105,58 @@ async function loadLyricsForSong(song) {
   } catch (e) {
     return { status: 'error' };
   }
+}
+
+// Karaoke-style synced lyric renderer. Highlights the current line based
+// on playback position and auto-scrolls so the active line stays centered.
+// Tapping a line seeks to its timestamp.
+function KaraokeLyrics({ lines, position, onSeek }) {
+  const scrollRef = useRef(null);
+  const [lineHeights, setLineHeights] = useState({});
+
+  let activeIndex = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (position >= lines[i].time) { activeIndex = i; break; }
+  }
+
+  useEffect(() => {
+    if (activeIndex < 0 || !scrollRef.current) return;
+    let y = 0;
+    for (let i = 0; i < activeIndex; i++) y += lineHeights[i] || 28;
+    // Center-ish within the visible area.
+    const target = Math.max(0, y - 120);
+    scrollRef.current.scrollTo({ y: target, animated: true });
+  }, [activeIndex, lineHeights]);
+
+  return (
+    <ScrollView
+      ref={scrollRef}
+      style={{ maxHeight: 420 }}
+      contentContainerStyle={{ paddingVertical: 60 }}
+      showsVerticalScrollIndicator={false}
+    >
+      {lines.map((line, i) => (
+        <TouchableOpacity
+          key={i}
+          onPress={() => onSeek && onSeek(line.time)}
+          onLayout={(e) => {
+            const h = e.nativeEvent.layout.height;
+            setLineHeights((prev) => (prev[i] === h ? prev : { ...prev, [i]: h }));
+          }}
+        >
+          <Text
+            style={[
+              styles.karaokeLine,
+              i === activeIndex && styles.karaokeLineActive,
+              i < activeIndex && styles.karaokeLinePast,
+            ]}
+          >
+            {line.text}
+          </Text>
+        </TouchableOpacity>
+      ))}
+    </ScrollView>
+  );
 }
 
 export default function NowPlaying({ visible, onClose }) {
@@ -303,7 +376,35 @@ export default function NowPlaying({ visible, onClose }) {
               )}
               {lyrics.status === 'ok' && (
                 <>
-                  <Text style={styles.lyricsBody}>{lyrics.text}</Text>
+                  {/* Compact player so the user can pause/skip while reading lyrics */}
+                  <View style={styles.miniPlayer}>
+                    {currentSong?.cover ? (
+                      <Image source={{ uri: currentSong.cover }} style={styles.miniThumb} />
+                    ) : (
+                      <View style={[styles.miniThumb, styles.coverFallback]}>
+                        <Ionicons name="musical-notes" size={20} color={theme.green} />
+                      </View>
+                    )}
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.miniTitle} numberOfLines={1}>
+                        {currentSong?.title || ''}
+                      </Text>
+                      <Text style={styles.miniArtist} numberOfLines={1}>
+                        {currentSong?.artist || 'PlayFool'}
+                      </Text>
+                    </View>
+                    <TouchableOpacity onPress={togglePlayPause} style={styles.miniBtn} hitSlop={8}>
+                      <Ionicons name={isPlaying ? 'pause' : 'play'} size={22} color={theme.textPrimary} />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={skipNext} style={styles.miniBtn} hitSlop={8}>
+                      <Ionicons name="play-skip-forward" size={22} color={theme.textPrimary} />
+                    </TouchableOpacity>
+                  </View>
+                  {lyrics.lines && lyrics.lines.length > 0 ? (
+                    <KaraokeLyrics lines={lyrics.lines} position={position} onSeek={seekTo} />
+                  ) : (
+                    <Text style={styles.lyricsBody}>{lyrics.text}</Text>
+                  )}
                   {lyrics.total > 0 && (
                     <View style={styles.matchBar}>
                       <Text style={styles.matchSource}>
@@ -402,6 +503,32 @@ const styles = StyleSheet.create({
   lyricsTitle: { color: theme.textPrimary, fontSize: 14, fontWeight: '700', marginTop: 10 },
   lyricsHint: { color: theme.textMuted, fontSize: 12, marginTop: 6, textAlign: 'center', paddingHorizontal: 24 },
   lyricsBody: { color: theme.textPrimary, fontSize: 14, lineHeight: 22 },
+  // Spotify-style karaoke: chunky bold active line, big light-gray future
+  // lines, very faded past lines. Left-aligned so multi-line lyrics wrap
+  // naturally instead of looking centered and weird.
+  karaokeLine: {
+    color: 'rgba(255, 255, 255, 0.55)',
+    fontSize: 19, lineHeight: 27, fontWeight: '700',
+    paddingVertical: 6, paddingHorizontal: 4,
+    textAlign: 'left',
+  },
+  karaokeLineActive: {
+    color: '#fff',
+    fontSize: 22, lineHeight: 30, fontWeight: '800',
+  },
+  karaokeLinePast: {
+    color: 'rgba(255, 255, 255, 0.22)',
+  },
+  miniPlayer: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+    paddingVertical: 10, paddingHorizontal: 4,
+    marginBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border,
+  },
+  miniThumb: { width: 44, height: 44, borderRadius: 6, backgroundColor: theme.bgSurface },
+  miniTitle: { color: theme.textPrimary, fontSize: 14, fontWeight: '700' },
+  miniArtist: { color: theme.textMuted, fontSize: 12, marginTop: 2 },
+  miniBtn: { padding: 6 },
   matchBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     marginTop: 16, paddingVertical: 8, paddingHorizontal: 12,

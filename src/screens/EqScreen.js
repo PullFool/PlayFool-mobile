@@ -41,10 +41,16 @@ export default function EqScreen({ visible, onClose }) {
   }, [visible]);
 
   const updateBand = (idx, mb) => {
-    const next = levels.slice();
-    next[idx] = mb;
-    setLevels(next);
-    setEqLevels(next);
+    // Functional setState so we always merge against the latest levels —
+    // the BandSlider's PanResponder is captured on first render and would
+    // otherwise call us with a stale closure where the other bands all
+    // appear to be 0, snapping them flat.
+    setLevels((prev) => {
+      const next = prev.slice();
+      next[idx] = mb;
+      setEqLevels(next);
+      return next;
+    });
     setActivePreset('');
   };
 
