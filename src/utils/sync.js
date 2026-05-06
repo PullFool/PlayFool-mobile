@@ -101,21 +101,40 @@ async function listCloud(pair) {
   return data.files || [];
 }
 
-// Match songs by base name (extension stripped, normalized) so the same
-// song stored as .mp3 on one device and .m4a on another isn't duplicated.
+// Match songs by base name with aggressive normalization so the same song
+// stored as .mp3 on one device and .m4a on another (and slightly different
+// punctuation between yt-dlp on PC and the mobile app) doesn't get
+// treated as separate files.
 function songKey(name) {
   if (!name) return '';
   return String(name)
-    .replace(/\.[^.]+$/, '')
-    .replace(/\s+/g, ' ')
+    .replace(/\.[^.]+$/, '')          // strip extension
+    .replace(/[^\p{L}\p{N}\s]/gu, '')  // strip punctuation (apostrophes, hyphens, em-dashes...)
+    .replace(/\s+/g, ' ')              // collapse whitespace
     .trim()
     .toLowerCase();
 }
 
+// Drop duplicate keys, keeping the first occurrence. Used to clean up
+// local lists where SAF and legacy MediaStore both expose the same song.
+function dedupByKey(list, keyFn) {
+  const seen = new Set();
+  const out = [];
+  for (const item of list) {
+    const k = keyFn(item);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(item);
+  }
+  return out;
+}
+
 // Diff: cloud-only → toDownload; local-only → toUpload. Match by song name.
 export async function planSync(pair) {
-  const cloud = await listCloud(pair);
-  const local = await listLocal();
+  const cloudRaw = await listCloud(pair);
+  const localRaw = await listLocal();
+  const cloud = dedupByKey(cloudRaw, (f) => songKey(f.name));
+  const local = dedupByKey(localRaw, (f) => songKey(f.name));
   const localSet = new Set(local.map((f) => songKey(f.name)));
   const cloudSet = new Set(cloud.map((f) => songKey(f.name)));
   const toDownload = cloud.filter((f) => !localSet.has(songKey(f.name)));
@@ -156,23 +175,51 @@ async function downloadOne(pair, file, onBytes) {
 
 async function uploadOne(pair, file, onBytes) {
   const url = `${pair.base}/v1/upload?code=${encodeURIComponent(pair.code)}&name=${encodeURIComponent(file.name)}&size=${file.size}`;
-  const task = FileSystem.createUploadTask(
-    url,
-    file.uri,
-    {
-      httpMethod: 'POST',
-      uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
-      headers: { 'Content-Type': 'application/octet-stream' },
-    },
-    (snap) => {
-      if (onBytes) onBytes(snap.totalByteSent, snap.totalBytesExpectedToSend);
+  // FileSystem.createUploadTask can't directly read SAF content:// URIs,
+  // so for SAF-stored files we first copy the bytes into our app cache
+  // and upload from there. The cache copy is deleted immediately after.
+  let uploadUri = file.uri;
+  let tempCopy = null;
+  if (typeof file.uri === 'string' && file.uri.startsWith('content://')) {
+    const cacheDir = FileSystem.cacheDirectory + 'PlayFool-upload/';
+    await FileSystem.makeDirectoryAsync(cacheDir, { intermediates: true }).catch(() => {});
+    const safeName = String(file.name || 'song').replace(/[^\w.\- ()]/g, '_');
+    tempCopy = cacheDir + safeName;
+    try {
+      const base64 = await FileSystem.readAsStringAsync(file.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      await FileSystem.writeAsStringAsync(tempCopy, base64, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      uploadUri = tempCopy;
+    } catch (e) {
+      throw new Error(`SAF read failed: ${e.message}`);
     }
-  );
-  const result = await task.uploadAsync();
-  if (result.status >= 400) {
-    throw new Error(`HTTP ${result.status}: ${(result.body || '').slice(0, 200)}`);
   }
-  return result;
+  try {
+    const task = FileSystem.createUploadTask(
+      url,
+      uploadUri,
+      {
+        httpMethod: 'POST',
+        uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
+        headers: { 'Content-Type': 'application/octet-stream' },
+      },
+      (snap) => {
+        if (onBytes) onBytes(snap.totalByteSent, snap.totalBytesExpectedToSend);
+      }
+    );
+    const result = await task.uploadAsync();
+    if (result.status >= 400) {
+      throw new Error(`HTTP ${result.status}: ${(result.body || '').slice(0, 200)}`);
+    }
+    return result;
+  } finally {
+    if (tempCopy) {
+      try { await FileSystem.deleteAsync(tempCopy, { idempotent: true }); } catch (e) {}
+    }
+  }
 }
 
 export async function runSync(pair, plan, onProgress, isCancelled) {
