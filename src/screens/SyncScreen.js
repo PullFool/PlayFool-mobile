@@ -136,30 +136,19 @@ export default function SyncScreen({ visible, onClose }) {
 
               {plan && (plan.toDownload.length > 0 || plan.toUpload.length > 0) && (
                 <View>
-                  {plan.toDownload.length > 0 && (
-                    <View style={styles.section}>
-                      <Text style={styles.sectionTitle}>
-                        ⬇ Download ({plan.toDownload.length})
-                      </Text>
-                      {plan.toDownload.map((f) => (
-                        <Text key={f.id} style={styles.fileLine} numberOfLines={1}>
-                          {f.name}  ({(f.size / 1024 / 1024).toFixed(1)} MB)
-                        </Text>
-                      ))}
+                  <View style={styles.section}>
+                    <View style={styles.summaryRow}>
+                      <View style={styles.summaryCell}>
+                        <Text style={styles.summaryNumber}>{plan.toDownload.length}</Text>
+                        <Text style={styles.summaryLabel}>⬇ Download</Text>
+                      </View>
+                      <View style={styles.summaryDivider} />
+                      <View style={styles.summaryCell}>
+                        <Text style={styles.summaryNumber}>{plan.toUpload.length}</Text>
+                        <Text style={styles.summaryLabel}>⬆ Upload</Text>
+                      </View>
                     </View>
-                  )}
-                  {plan.toUpload.length > 0 && (
-                    <View style={styles.section}>
-                      <Text style={styles.sectionTitle}>
-                        ⬆ Upload ({plan.toUpload.length})
-                      </Text>
-                      {plan.toUpload.map((f) => (
-                        <Text key={f.name} style={styles.fileLine} numberOfLines={1}>
-                          {f.name}  ({(f.size / 1024 / 1024).toFixed(1)} MB)
-                        </Text>
-                      ))}
-                    </View>
-                  )}
+                  </View>
                   <TouchableOpacity onPress={onSync} disabled={loading} style={styles.primary}>
                     {loading ? <ActivityIndicator color="#000" /> : <Ionicons name="sync" size={16} color="#000" />}
                     <Text style={styles.primaryText}>
@@ -266,4 +255,9 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: theme.red,
   },
   cancelText: { color: theme.red, fontSize: 12, fontWeight: '700' },
+  summaryRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-around', paddingVertical: 8 },
+  summaryCell: { alignItems: 'center', flex: 1 },
+  summaryDivider: { width: 1, height: 36, backgroundColor: theme.border },
+  summaryNumber: { color: theme.green, fontSize: 28, fontWeight: '800' },
+  summaryLabel: { color: theme.textSecondary, fontSize: 11, fontWeight: '600', marginTop: 2 },
 });

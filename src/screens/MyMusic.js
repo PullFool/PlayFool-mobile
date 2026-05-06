@@ -79,25 +79,30 @@ export default function MyMusic() {
   // deleted from disk.
   const confirmDelete = (song) => {
     const isScanned = song.source === 'scanned';
+    // Downloaded files: Android pops its own "Allow PlayFool to delete?"
+    // dialog before MediaLibrary.deleteAssetsAsync runs, so showing our
+    // own confirm on top is redundant. Skip straight to the system prompt.
+    if (!isScanned) {
+      (async () => {
+        try { await deleteLocalAudio(song); load(); }
+        catch (e) { reportError('mymusic.delete', e, { id: song.id, source: song.source }); }
+      })();
+      return;
+    }
+    // Scanned files: Android won't ask (we don't actually touch the file —
+    // just drop it from our cache), so our dialog is the only confirmation.
     Alert.alert(
-      isScanned ? 'Remove from PlayFool?' : 'Delete song?',
-      isScanned
-        ? `"${song.title}"\n\nThis only hides the song in PlayFool. The file stays on your phone and will come back the next time you tap Scan Phone.`
-        : `"${song.title}"\n\nThis will permanently delete the file from your phone's PlayFool folder.`,
+      'Remove from PlayFool?',
+      `"${song.title}"\n\nThis only hides the song in PlayFool. The file stays on your phone and will come back the next time you tap Scan Phone.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: isScanned ? 'Remove' : 'Delete',
+          text: 'Remove',
           style: 'destructive',
           onPress: async () => {
-            if (isScanned) {
-              const next = scanned.filter((s) => s.url !== song.url);
-              setScanned(next);
-              try { await AsyncStorage.setItem(SCAN_CACHE_KEY, JSON.stringify(next)); } catch (e) {}
-              return;
-            }
-            try { await deleteLocalAudio(song); load(); }
-            catch (e) { reportError('mymusic.delete', e, { id: song.id, source: song.source }); }
+            const next = scanned.filter((s) => s.url !== song.url);
+            setScanned(next);
+            try { await AsyncStorage.setItem(SCAN_CACHE_KEY, JSON.stringify(next)); } catch (e) {}
           },
         },
       ]
