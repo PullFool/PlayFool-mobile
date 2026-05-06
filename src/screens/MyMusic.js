@@ -79,30 +79,31 @@ export default function MyMusic() {
   // deleted from disk.
   const confirmDelete = (song) => {
     const isScanned = song.source === 'scanned';
-    // Downloaded files: Android pops its own "Allow PlayFool to delete?"
-    // dialog before MediaLibrary.deleteAssetsAsync runs, so showing our
-    // own confirm on top is redundant. Skip straight to the system prompt.
-    if (!isScanned) {
-      (async () => {
-        try { await deleteLocalAudio(song); load(); }
-        catch (e) { reportError('mymusic.delete', e, { id: song.id, source: song.source }); }
-      })();
-      return;
-    }
-    // Scanned files: Android won't ask (we don't actually touch the file —
-    // just drop it from our cache), so our dialog is the only confirmation.
+    // SAF-stored files (source 'saf') delete silently without an Android
+    // prompt, so a single PlayFool confirm is the whole flow. Legacy
+    // MediaStore files (source 'local') will still get one Android prompt
+    // after our confirm — that's a one-time pain to clean up old downloads.
+    const title = isScanned ? 'Remove from PlayFool?' : 'Delete this song?';
+    const body = isScanned
+      ? `"${song.title}"\n\nThis only hides the song in PlayFool. The file stays on your phone and will come back the next time you tap Scan Phone.`
+      : `"${song.title}"\n\nThe file will be permanently removed from your phone.`;
     Alert.alert(
-      'Remove from PlayFool?',
-      `"${song.title}"\n\nThis only hides the song in PlayFool. The file stays on your phone and will come back the next time you tap Scan Phone.`,
+      title,
+      body,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Remove',
+          text: isScanned ? 'Remove' : 'Delete',
           style: 'destructive',
           onPress: async () => {
-            const next = scanned.filter((s) => s.url !== song.url);
-            setScanned(next);
-            try { await AsyncStorage.setItem(SCAN_CACHE_KEY, JSON.stringify(next)); } catch (e) {}
+            if (isScanned) {
+              const next = scanned.filter((s) => s.url !== song.url);
+              setScanned(next);
+              try { await AsyncStorage.setItem(SCAN_CACHE_KEY, JSON.stringify(next)); } catch (e) {}
+              return;
+            }
+            try { await deleteLocalAudio(song); load(); }
+            catch (e) { reportError('mymusic.delete', e, { id: song.id, source: song.source }); }
           },
         },
       ]

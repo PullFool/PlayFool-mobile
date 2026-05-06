@@ -2,6 +2,8 @@
 // chasing public Piped/Invidious/Cobalt instances that get blocked weekly.
 import * as FileSystem from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ensureSafFolder, getSafUri, safCreateFile, safListFiles, safDelete } from './saf';
 
 const API_BASE = 'https://playfool-api-production.up.railway.app/api/yt';
 const DEFAULT_TIMEOUT = 12000; // generous so a Railway cold-start can finish
@@ -89,41 +91,46 @@ export async function downloadAudio(video, onProgress) {
   const result = await dl.downloadAsync();
   if (!result?.uri) throw new Error('Download failed');
 
-  // 2. Hand the file to the system Music library so it survives uninstall and
-  //    is visible to other music apps. Requires media-library permission.
-  const perm = await MediaLibrary.requestPermissionsAsync();
-  if (!perm.granted) {
-    // Fall back to keeping the file in app cache if the user refused.
-    return { uri: result.uri, filename, title: video.title };
-  }
+  // 2. Move into the SAF folder. The user picked this folder once at first
+  //    launch; PlayFool has persistent permission inside it. No "Allow
+  //    modify" prompt is shown because the folder is not MediaStore-owned.
+  const safUri = await ensureSafFolder();
+  const finalUri = await safCreateFile(safUri, filename, 'audio/mp4', result.uri);
 
-  const asset = await MediaLibrary.createAssetAsync(result.uri);
-  try {
-    let album = await MediaLibrary.getAlbumAsync(ALBUM_NAME);
-    if (!album) {
-      album = await MediaLibrary.createAlbumAsync(ALBUM_NAME, asset, false);
-    } else {
-      // copy=true avoids Android 11+'s "allow modify" permission dialog.
-      await MediaLibrary.addAssetsToAlbumAsync([asset], album, true);
-    }
-  } catch (e) {
-    // Album organization is best-effort. The file still ends up in /Music/.
-  }
-
-  // 3. Clean up the cache copy. The MediaStore now owns the file at its public
-  //    path. expo-file-system can delete from cacheDirectory we own.
+  // 3. Clean up the cache copy.
   try { await FileSystem.deleteAsync(result.uri, { idempotent: true }); } catch (e) {}
 
-  return { uri: asset.uri, assetId: asset.id, filename, title: video.title };
+  return { uri: finalUri, filename, title: video.title };
 }
 
-// List downloaded audio. Reads both:
-// 1. The MediaLibrary 'PlayFool' album (new public-folder downloads)
-// 2. Legacy app-private folder (for users upgrading from older versions)
+// List downloaded audio. Reads:
+// 1. The SAF folder (current downloads — silent delete, no Android prompts)
+// 2. Legacy MediaStore 'PlayFool' album (older installs — Android still prompts)
+// 3. Legacy app-private folder (very old installs)
 export async function listLocalAudio() {
   const out = [];
 
-  // New location: MediaStore PlayFool album
+  // 1. New location: SAF folder
+  try {
+    const safUri = await getSafUri();
+    if (safUri) {
+      const files = await safListFiles(safUri);
+      for (const f of files) {
+        out.push({
+          id: 'saf-' + encodeURIComponent(f.uri),
+          safUri: f.uri,
+          title: f.name.replace(/\.[^.]+$/, '') || 'Unknown',
+          artist: 'PlayFool',
+          url: f.uri,
+          cover: null,
+          source: 'saf',
+          size: f.size,
+        });
+      }
+    }
+  } catch (e) {}
+
+  // 2. Legacy: MediaStore PlayFool album
   try {
     const perm = await MediaLibrary.requestPermissionsAsync();
     if (perm.granted) {
@@ -183,12 +190,18 @@ export async function listLocalAudio() {
   return out;
 }
 
-// Delete a downloaded song. MediaLibrary assets need MediaLibrary.deleteAssetsAsync;
-// legacy app-private files use FileSystem.deleteAsync.
+// Delete a downloaded song.
+//   - SAF-stored files (source === 'saf') delete silently, no Android prompt.
+//   - Legacy MediaStore assets still go through MediaLibrary.deleteAssetsAsync,
+//     which on Android 11+ shows the system "Allow modify" dialog. One-time
+//     pain to clean up old downloads from before SAF.
 export async function deleteLocalAudio(song) {
-  // Backwards-compat: callers used to pass a uri string. Accept either.
   if (typeof song === 'string') {
     return FileSystem.deleteAsync(song, { idempotent: true });
+  }
+  if (song?.safUri) {
+    await safDelete(song.safUri);
+    return;
   }
   if (song?.assetId) {
     await MediaLibrary.deleteAssetsAsync([song.assetId]);
@@ -198,6 +211,55 @@ export async function deleteLocalAudio(song) {
     return FileSystem.deleteAsync(song.url, { idempotent: true });
   }
   throw new Error('Nothing to delete');
+}
+
+// Find pairs of MediaStore audio assets with the same filename — typical
+// pattern from older PlayFool versions that called addAssetsToAlbumAsync
+// with copy=true, which physically duplicated bytes to /Music/<file>
+// AND /Music/PlayFool/<file>. Keeps the one inside the PlayFool folder,
+// queues the loose copies for deletion. One Android prompt covers them all.
+export async function cleanupDuplicates() {
+  const perm = await MediaLibrary.requestPermissionsAsync();
+  if (!perm.granted) throw new Error('Permission denied');
+
+  const all = [];
+  let endCursor;
+  let hasNextPage = true;
+  while (hasNextPage) {
+    const page = await MediaLibrary.getAssetsAsync({
+      mediaType: MediaLibrary.MediaType.audio,
+      first: 100,
+      after: endCursor,
+    });
+    all.push(...page.assets);
+    endCursor = page.endCursor;
+    hasNextPage = page.hasNextPage;
+  }
+
+  const byName = new Map();
+  for (const a of all) {
+    const arr = byName.get(a.filename) || [];
+    arr.push(a);
+    byName.set(a.filename, arr);
+  }
+
+  const toDelete = [];
+  for (const [, assets] of byName) {
+    if (assets.length < 2) continue;
+    const withPaths = await Promise.all(assets.map(async (a) => {
+      const info = await MediaLibrary.getAssetInfoAsync(a).catch(() => null);
+      return { ...a, localUri: info?.localUri || a.uri };
+    }));
+    const keeper = withPaths.find((a) => /\/PlayFool\//i.test(a.localUri || ''));
+    const losers = keeper
+      ? withPaths.filter((a) => a.id !== keeper.id)
+      : withPaths.slice(1);
+    for (const x of losers) toDelete.push(x.id);
+  }
+
+  if (toDelete.length === 0) return { found: 0, deleted: 0 };
+  await MediaLibrary.deleteAssetsAsync(toDelete);
+  return { found: toDelete.length, deleted: toDelete.length };
 }
 
 export async function scanPhoneAudio({ onProgress } = {}) {

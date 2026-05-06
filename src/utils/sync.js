@@ -6,6 +6,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
 import { reportError } from './errorReporter';
+import { ensureSafFolder, getSafUri, safCreateFile, safListFiles } from './saf';
 
 const RELAY_URL = 'https://playfool-sync.playfool-sync.workers.dev';
 const PAIR_KEY = 'playfool_mobile_sync_pair';
@@ -55,32 +56,43 @@ export async function pairWith(code) {
 
 async function listLocal() {
   const out = [];
-  const perm = await MediaLibrary.requestPermissionsAsync();
-  if (!perm.granted) return out;
-  const album = await MediaLibrary.getAlbumAsync(ALBUM_NAME);
-  if (!album) return out;
-  let endCursor;
-  let hasNextPage = true;
-  while (hasNextPage) {
-    const page = await MediaLibrary.getAssetsAsync({
-      album: album.id,
-      mediaType: MediaLibrary.MediaType.audio,
-      first: 200,
-      after: endCursor,
-    });
-    for (const asset of page.assets) {
-      const info = await MediaLibrary.getAssetInfoAsync(asset).catch(() => null);
-      const localUri = info?.localUri || asset.uri;
-      let size = 0;
-      try {
-        const stat = await FileSystem.getInfoAsync(localUri, { size: true });
-        size = stat?.size || 0;
-      } catch (e) {}
-      out.push({ name: asset.filename, size, uri: localUri, assetId: asset.id });
+  // 1. SAF folder (current downloads — uploaded via SAF URI)
+  try {
+    const safUri = await getSafUri();
+    if (safUri) {
+      const files = await safListFiles(safUri);
+      for (const f of files) out.push({ name: f.name, size: f.size, uri: f.uri });
     }
-    endCursor = page.endCursor;
-    hasNextPage = page.hasNextPage;
-  }
+  } catch (e) {}
+  // 2. Legacy MediaStore PlayFool album (older installs still uploading from there)
+  try {
+    const perm = await MediaLibrary.requestPermissionsAsync();
+    if (!perm.granted) return out;
+    const album = await MediaLibrary.getAlbumAsync(ALBUM_NAME);
+    if (!album) return out;
+    let endCursor;
+    let hasNextPage = true;
+    while (hasNextPage) {
+      const page = await MediaLibrary.getAssetsAsync({
+        album: album.id,
+        mediaType: MediaLibrary.MediaType.audio,
+        first: 200,
+        after: endCursor,
+      });
+      for (const asset of page.assets) {
+        const info = await MediaLibrary.getAssetInfoAsync(asset).catch(() => null);
+        const localUri = info?.localUri || asset.uri;
+        let size = 0;
+        try {
+          const stat = await FileSystem.getInfoAsync(localUri, { size: true });
+          size = stat?.size || 0;
+        } catch (e) {}
+        out.push({ name: asset.filename, size, uri: localUri, assetId: asset.id });
+      }
+      endCursor = page.endCursor;
+      hasNextPage = page.hasNextPage;
+    }
+  } catch (e) {}
   return out;
 }
 
@@ -131,21 +143,15 @@ async function downloadOne(pair, file, onBytes) {
   });
   const result = await dl.downloadAsync();
   if (!result?.uri) throw new Error('Download failed');
-  const asset = await MediaLibrary.createAssetAsync(result.uri);
-  try {
-    let album = await MediaLibrary.getAlbumAsync(ALBUM_NAME);
-    if (!album) album = await MediaLibrary.createAlbumAsync(ALBUM_NAME, asset, false);
-    // copy=true avoids Android 11+'s "allow modify" permission dialog that
-    // pops up on every move. The asset is referenced by the album, not
-    // physically duplicated, on modern Android.
-    else await MediaLibrary.addAssetsToAlbumAsync([asset], album, true);
-  } catch (e) {}
+  // Move into the user's SAF folder — silent, no Android prompt.
+  const safUri = await ensureSafFolder();
+  const finalUri = await safCreateFile(safUri, safeName, 'audio/mp4', result.uri);
   try { await FileSystem.deleteAsync(result.uri, { idempotent: true }); } catch (e) {}
   // We intentionally do NOT confirm-delete the cloud copy here. Leaving
   // the file on R2 for up to 24h (the cron cleanup window) lets the same
   // device re-sync without re-uploading and lets multiple peers on the
   // same code each pull it. The 24h cron is the only cleanup.
-  return asset;
+  return { uri: finalUri };
 }
 
 async function uploadOne(pair, file, onBytes) {
