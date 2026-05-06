@@ -141,10 +141,10 @@ async function downloadOne(pair, file, onBytes) {
     else await MediaLibrary.addAssetsToAlbumAsync([asset], album, true);
   } catch (e) {}
   try { await FileSystem.deleteAsync(result.uri, { idempotent: true }); } catch (e) {}
-  // Tell the relay it's safe to delete the cloud copy.
-  try {
-    await fetch(`${pair.base}/v1/confirm?code=${encodeURIComponent(pair.code)}&id=${encodeURIComponent(file.id)}`, { method: 'POST' });
-  } catch (e) {}
+  // We intentionally do NOT confirm-delete the cloud copy here. Leaving
+  // the file on R2 for up to 24h (the cron cleanup window) lets the same
+  // device re-sync without re-uploading and lets multiple peers on the
+  // same code each pull it. The 24h cron is the only cleanup.
   return asset;
 }
 
