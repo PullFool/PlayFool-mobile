@@ -103,12 +103,35 @@ export async function downloadAudio(video, onProgress) {
   return { uri: finalUri, filename, title: video.title };
 }
 
+// Match songs by their base name with the same normalization sync.js uses.
+// Same file showing up in multiple storage sources gets collapsed.
+function localSongKey(name) {
+  if (!name) return '';
+  return String(name)
+    .replace(/\.[^.]+$/, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
 // List downloaded audio. Reads:
 // 1. The SAF folder (current downloads — silent delete, no Android prompts)
 // 2. Legacy MediaStore 'PlayFool' album (older installs — Android still prompts)
 // 3. Legacy app-private folder (very old installs)
+//
+// SAF entries take priority — if the same song appears in both SAF and
+// legacy MediaStore (because it was downloaded before v1.0.36 then re-synced
+// after), we list only the SAF copy so My Music doesn't show duplicates.
 export async function listLocalAudio() {
   const out = [];
+  const seen = new Set();
+  const push = (entry) => {
+    const key = localSongKey(entry.title || entry.url || '');
+    if (key && seen.has(key)) return;
+    if (key) seen.add(key);
+    out.push(entry);
+  };
 
   // 1. New location: SAF folder
   try {
@@ -116,7 +139,7 @@ export async function listLocalAudio() {
     if (safUri) {
       const files = await safListFiles(safUri);
       for (const f of files) {
-        out.push({
+        push({
           id: 'saf-' + encodeURIComponent(f.uri),
           safUri: f.uri,
           title: f.name.replace(/\.[^.]+$/, '') || 'Unknown',
@@ -146,7 +169,7 @@ export async function listLocalAudio() {
             after: endCursor,
           });
           for (const asset of page.assets) {
-            out.push({
+            push({
               id: 'local-' + asset.id,
               assetId: asset.id,
               title: (asset.filename || '').replace(/\.[^.]+$/, '') || 'Unknown',
@@ -171,11 +194,9 @@ export async function listLocalAudio() {
     if (exists.exists) {
       const files = await FileSystem.readDirectoryAsync(dir);
       const audio = files.filter((f) => /\.(m4a|mp3|webm|opus|ogg)$/i.test(f));
-      const seen = new Set(out.map((s) => (s.title || '').toLowerCase()));
       for (const f of audio) {
         const title = f.replace(/\.[^.]+$/, '');
-        if (seen.has(title.toLowerCase())) continue;
-        out.push({
+        push({
           id: 'legacy-' + f,
           title,
           artist: 'PlayFool',
