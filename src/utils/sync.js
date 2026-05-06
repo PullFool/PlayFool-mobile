@@ -117,7 +117,13 @@ async function downloadOne(pair, file, onBytes) {
   // Strip any path separators or weird chars from the server-provided name —
   // older R2 entries can have a name that's actually the full "code/id" key,
   // which Android's downloader interprets as a missing subdirectory.
-  const safeName = String(file.name || file.id || 'song').split(/[\/\\]/).pop().replace(/[^\w.\- ()]/g, '_') || 'song';
+  let safeName = String(file.name || file.id || 'song').split(/[\/\\]/).pop().replace(/[^\w.\- ()]/g, '_') || 'song';
+  // MediaStore needs a recognized audio extension to import. If the server
+  // returned a bare id (legacy uploads), assume m4a since that's what mobile
+  // downloads as.
+  if (!/\.(mp3|m4a|opus|webm|ogg|wav|aac|flac)$/i.test(safeName)) {
+    safeName += '.m4a';
+  }
   const tempUri = tempDir + safeName;
   const url = `${pair.base}/v1/file/${file.id}?code=${encodeURIComponent(pair.code)}`;
   const dl = FileSystem.createDownloadResumable(url, tempUri, {}, (snap) => {
