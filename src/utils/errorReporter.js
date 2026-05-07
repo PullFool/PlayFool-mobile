@@ -13,6 +13,16 @@ const APP_VERSION = Application.nativeApplicationVersion || 'dev';
 const recentErrors = new Map();
 const DEDUP_WINDOW_MS = 30000;
 
+// Sources where every error matters — user-triggered actions whose retries
+// are rare and diagnostic. We skip the 30s dedup window for these so every
+// attempt lands in Discord (otherwise users hit "download" 3x in 30s and
+// only the first ever reaches us).
+const NO_DEDUP_SOURCES = new Set([
+  'download',
+  'sync.download',
+  'sync.upload',
+]);
+
 function sanitize(text) {
   if (!text || typeof text !== 'string') return String(text || '');
   return text
@@ -25,9 +35,11 @@ function send(source, message, stack, extra = {}) {
   if (!message || !DISCORD_WEBHOOK) return;
   const signature = `${source}:${message}`;
   const now = Date.now();
-  const last = recentErrors.get(signature);
-  if (last && now - last < DEDUP_WINDOW_MS) return;
-  recentErrors.set(signature, now);
+  if (!NO_DEDUP_SOURCES.has(source)) {
+    const last = recentErrors.get(signature);
+    if (last && now - last < DEDUP_WINDOW_MS) return;
+    recentErrors.set(signature, now);
+  }
 
   if (recentErrors.size > 100) {
     for (const [k, t] of recentErrors) {
