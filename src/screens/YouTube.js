@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, Image, ActivityIndicator } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, Image, ActivityIndicator, Share } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { theme } from '../utils/theme';
@@ -86,8 +86,19 @@ export default function YouTube() {
       setDownloadState(s => ({ ...s, [video.id]: 'done' }));
     } catch (e) {
       reportError('download', e, { videoId: video.id, title: video.title });
-      setError('Download failed: ' + (e.message || '').split('\n')[0]);
+      // Keep the FULL message — no .split('\n')[0]. The user needs to be
+      // able to share/copy the whole chain so we can diagnose.
+      setError('Download failed: ' + (e.message || String(e)));
       setDownloadState(s => ({ ...s, [video.id]: 'error' }));
+    }
+  };
+
+  const shareError = async () => {
+    if (!error) return;
+    try {
+      await Share.share({ message: error });
+    } catch (e) {
+      // user dismissed or sharing not available — nothing to do
     }
   };
 
@@ -132,7 +143,15 @@ export default function YouTube() {
         </TouchableOpacity>
       </View>
 
-      {error ? <Text style={styles.error}>{error}</Text> : null}
+      {error ? (
+        <View style={styles.errorBox}>
+          <Text style={styles.error} selectable>{error}</Text>
+          <TouchableOpacity style={styles.errorShareBtn} onPress={shareError}>
+            <Ionicons name="share-outline" size={14} color="#fff" />
+            <Text style={styles.errorShareLabel}>Share error</Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
 
       <FlatList
         data={results}
@@ -225,7 +244,23 @@ const styles = StyleSheet.create({
   historyText: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
   historyLabel: { color: theme.textSecondary, fontSize: 13, flex: 1 },
   historyRemove: { padding: 4 },
-  error: { color: '#ff6b6b', fontSize: 13, marginBottom: 8 },
+  errorBox: {
+    backgroundColor: 'rgba(255,107,107,0.10)',
+    borderColor: 'rgba(255,107,107,0.4)',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 10,
+    marginBottom: 8,
+  },
+  error: { color: '#ff6b6b', fontSize: 12, lineHeight: 16 },
+  errorShareBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(255,255,255,0.10)',
+    paddingHorizontal: 10, paddingVertical: 6, borderRadius: 14,
+    marginTop: 8,
+  },
+  errorShareLabel: { color: '#fff', fontSize: 12, fontWeight: '600' },
   row: { flexDirection: 'row', gap: 10, paddingVertical: 8, alignItems: 'center' },
   thumbWrap: { width: 60, height: 60, borderRadius: 6, overflow: 'hidden', backgroundColor: theme.bgSurface, alignItems: 'center', justifyContent: 'center', position: 'relative' },
   thumb: { width: '100%', height: '100%' },
