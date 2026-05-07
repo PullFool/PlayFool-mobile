@@ -1,13 +1,21 @@
 // Phone-side YouTube stream extraction. Calls YouTube's internal Innertube
-// API (the same one official YouTube apps use) directly from the phone, so
-// YouTube sees a residential IP — no bot wall, no PoToken, no cookies
-// needed. The Android client returns plain URLs in adaptiveFormats most of
-// the time, which expo-av and FileSystem.createDownloadResumable can stream
-// directly.
+// API directly from the phone (residential IP), so we bypass the data-center
+// bot wall hitting the Railway API.
+//
+// Client strategy: try the clients least likely to require a PoToken first.
+// As of 2025 YouTube has been forcing PoToken on the standard ANDROID/IOS
+// mobile clients; TVHTML5 and ANDROID_VR generally still pass without one.
 
 const INNERTUBE_PATH = '/youtubei/v1/player?prettyPrint=false';
-const ANDROID_USER_AGENT = 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip';
-const ANDROID_CLIENT_VERSION = '19.09.37';
+
+const CLIENT_NAME_TO_ID = {
+  WEB: 1,
+  ANDROID: 3,
+  IOS: 5,
+  TVHTML5_SIMPLY_EMBEDDED_PLAYER: 85,
+  ANDROID_VR: 28,
+  WEB_EMBEDDED_PLAYER: 56,
+};
 
 async function fetchInnertube(videoId, client) {
   const body = {
@@ -16,14 +24,15 @@ async function fetchInnertube(videoId, client) {
     contentCheckOk: true,
     racyCheckOk: true,
   };
+  const clientId = CLIENT_NAME_TO_ID[client.clientName] || 1;
   const res = await fetch(`https://www.youtube.com${INNERTUBE_PATH}`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
-      'X-YouTube-Client-Name': String(client.clientName === 'ANDROID' ? 3 : (client.clientName === 'IOS' ? 5 : 1)),
+      'X-YouTube-Client-Name': String(clientId),
       'X-YouTube-Client-Version': client.clientVersion,
-      'User-Agent': client.userAgent || ANDROID_USER_AGENT,
+      'User-Agent': client.userAgent || 'Mozilla/5.0',
     },
     body: JSON.stringify(body),
   });
@@ -34,26 +43,51 @@ async function fetchInnertube(videoId, client) {
   return res.json();
 }
 
+// Order matters — try non-PoToken-gated clients first.
 const CLIENTS = [
-  // Android client — usually returns plain URLs, no signature decryption needed.
+  // TV embedded — historically the most permissive; doesn't need PoToken,
+  // returns plain URLs for most videos.
   {
-    clientName: 'ANDROID',
-    clientVersion: ANDROID_CLIENT_VERSION,
-    androidSdkVersion: 30,
-    osName: 'Android',
-    osVersion: '11',
-    platform: 'MOBILE',
-    userAgent: ANDROID_USER_AGENT,
+    clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
+    clientVersion: '2.0',
+    platform: 'TV',
+    userAgent: 'Mozilla/5.0 (PlayStation; PlayStation 4/12.00) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15',
   },
-  // iOS client — fallback if Android client gets gated.
+  // Android VR (Meta Quest) — no PoToken requirement reported; plain URLs.
+  {
+    clientName: 'ANDROID_VR',
+    clientVersion: '1.60.19',
+    androidSdkVersion: 32,
+    osName: 'Android',
+    osVersion: '12L',
+    platform: 'MOBILE',
+    userAgent: 'com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip',
+  },
+  // Web embedded — alternative path that sometimes works when others don't.
+  {
+    clientName: 'WEB_EMBEDDED_PLAYER',
+    clientVersion: '1.20240530.00.00',
+    platform: 'DESKTOP',
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+  },
+  // Standard mobile clients last — PoToken-gated more aggressively.
   {
     clientName: 'IOS',
-    clientVersion: '19.09.3',
-    deviceModel: 'iPhone14,3',
+    clientVersion: '19.45.4',
+    deviceModel: 'iPhone16,2',
     osName: 'iOS',
-    osVersion: '15.6.0.19G71',
+    osVersion: '17.5.1.21F90',
     platform: 'MOBILE',
-    userAgent: 'com.google.ios.youtube/19.09.3 (iPhone14,3; U; CPU iOS 15_6 like Mac OS X)',
+    userAgent: 'com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 17_5_1 like Mac OS X)',
+  },
+  {
+    clientName: 'ANDROID',
+    clientVersion: '19.50.42',
+    androidSdkVersion: 33,
+    osName: 'Android',
+    osVersion: '13',
+    platform: 'MOBILE',
+    userAgent: 'com.google.android.youtube/19.50.42 (Linux; U; Android 13) gzip',
   },
 ];
 
@@ -70,22 +104,34 @@ function pickBestAudioUrl(streamingData) {
   return audio[0].url;
 }
 
+// Diagnostic: detect why a streamingData was unusable. Helps the next error
+// surface tell us "all formats are signatureCipher" vs "no formats at all".
+function describeStreamingFailure(streamingData) {
+  const formats = streamingData?.adaptiveFormats || [];
+  if (formats.length === 0) return 'no adaptiveFormats';
+  const audio = formats.filter((f) => typeof f?.mimeType === 'string' && f.mimeType.startsWith('audio/'));
+  if (audio.length === 0) return 'no audio formats';
+  const ciphered = audio.filter((f) => !f.url && (f.signatureCipher || f.cipher));
+  if (ciphered.length === audio.length) return 'all audio formats are signatureCipher (need n-sig decode)';
+  return 'unknown — formats present but none usable';
+}
+
 export async function getYoutubeStreamUrl(videoId) {
-  let lastErr = '';
+  const errors = [];
   for (const client of CLIENTS) {
     try {
       const data = await fetchInnertube(videoId, client);
       const status = data?.playabilityStatus?.status;
       if (status && status !== 'OK') {
-        lastErr = `${client.clientName}: ${data.playabilityStatus.reason || status}`;
+        errors.push(`${client.clientName}: ${data.playabilityStatus.reason || status}`);
         continue;
       }
       const url = pickBestAudioUrl(data?.streamingData);
       if (url) return url;
-      lastErr = `${client.clientName}: no playable audio formats`;
+      errors.push(`${client.clientName}: ${describeStreamingFailure(data?.streamingData)}`);
     } catch (e) {
-      lastErr = `${client.clientName}: ${e.message}`;
+      errors.push(`${client.clientName}: ${e.message}`);
     }
   }
-  throw new Error(lastErr || 'all clients failed');
+  throw new Error(errors.join(' | ') || 'all clients failed');
 }

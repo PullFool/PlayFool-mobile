@@ -59,20 +59,27 @@ export async function getAudioStreamUrl(videoId) {
   // so YouTube doesn't bot-wall us the way it does our Railway data-center
   // IP. When this works we don't even hit our API — the phone talks straight
   // to youtube.com and gets a googlevideo URL.
+  let phoneErr = '';
   try {
     const url = await getYoutubeStreamUrl(videoId);
     if (url) return url;
+    phoneErr = 'phone-side returned empty URL';
   } catch (e) {
-    // Fall through to the API tier; the API has a layered fallback chain
-    // that may still find the stream from one of its scraper backends.
+    phoneErr = e.message || String(e);
   }
 
   // 30s — server walks several yt-dlp player clients in parallel and may
   // legitimately need longer than the default 12s on a cold Railway dyno.
-  const data = await apiGet(`/stream/${videoId}`, 30000);
-  const url = data?.url || data?.audio || null;
-  if (!url) throw new Error('No playable audio stream returned by API');
-  return url;
+  try {
+    const data = await apiGet(`/stream/${videoId}`, 30000);
+    const url = data?.url || data?.audio || null;
+    if (!url) throw new Error('No playable audio stream returned by API');
+    return url;
+  } catch (apiErr) {
+    // Both extraction paths failed. Surface BOTH errors so we know which is
+    // actually the bottleneck — phone-side or server-side.
+    throw new Error(`Phone: ${phoneErr} || API: ${apiErr.message || apiErr}`);
+  }
 }
 
 const sanitize = (name) =>
