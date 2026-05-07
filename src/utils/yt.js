@@ -5,6 +5,7 @@ import * as MediaLibrary from 'expo-media-library';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ensureSafFolder, getSafUri, safCreateFile, safListFiles, safDelete } from './saf';
 import { getYoutubeStreamUrl } from './youtubeStream';
+import { extractStreamUrlViaWebView, isWebViewExtractorReady } from '../components/HiddenYouTubeWebView';
 
 const API_BASE = 'https://playfool-api-production.up.railway.app/api/yt';
 const DEFAULT_TIMEOUT = 12000; // generous so a Railway cold-start can finish
@@ -55,10 +56,25 @@ export async function searchMusic(query, limit = 30) {
 }
 
 export async function getAudioStreamUrl(videoId) {
-  // First try phone-side Innertube extraction. The phone's IP is residential
-  // so YouTube doesn't bot-wall us the way it does our Railway data-center
-  // IP. When this works we don't even hit our API — the phone talks straight
-  // to youtube.com and gets a googlevideo URL.
+  // 1. Hidden WebView extractor — runs the Innertube call inside a real
+  //    Chrome WebView at youtube.com, so the request carries real cookies +
+  //    visitor data + Chrome fingerprint. Bypasses the bot wall that hits our
+  //    raw fetch() and yt-dlp on data-center IPs.
+  let webViewErr = '';
+  if (isWebViewExtractorReady()) {
+    try {
+      const url = await extractStreamUrlViaWebView(videoId);
+      if (url) return url;
+      webViewErr = 'WebView returned empty URL';
+    } catch (e) {
+      webViewErr = e.message || String(e);
+    }
+  } else {
+    webViewErr = 'WebView not ready';
+  }
+
+  // 2. Phone-side raw Innertube — works occasionally for clients that don't
+  //    require real session cookies (TVHTML5, ANDROID_VR historically).
   let phoneErr = '';
   try {
     const url = await getYoutubeStreamUrl(videoId);
@@ -68,17 +84,17 @@ export async function getAudioStreamUrl(videoId) {
     phoneErr = e.message || String(e);
   }
 
-  // 30s — server walks several yt-dlp player clients in parallel and may
-  // legitimately need longer than the default 12s on a cold Railway dyno.
+  // 3. Railway API last-resort. Mostly bot-walled at data-center IP but
+  //    occasionally a scraper-tier still works.
   try {
     const data = await apiGet(`/stream/${videoId}`, 30000);
     const url = data?.url || data?.audio || null;
     if (!url) throw new Error('No playable audio stream returned by API');
     return url;
   } catch (apiErr) {
-    // Both extraction paths failed. Surface BOTH errors so we know which is
-    // actually the bottleneck — phone-side or server-side.
-    throw new Error(`Phone: ${phoneErr} || API: ${apiErr.message || apiErr}`);
+    throw new Error(
+      `WebView: ${webViewErr} || Phone: ${phoneErr} || API: ${apiErr.message || apiErr}`
+    );
   }
 }
 

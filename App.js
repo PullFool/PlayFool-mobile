@@ -11,6 +11,7 @@ import Player from './src/components/Player';
 import NowPlaying from './src/screens/NowPlaying';
 import UpdateBanner from './src/components/UpdateBanner';
 import HeartPrompt from './src/components/HeartPrompt';
+import HiddenYouTubeWebView from './src/components/HiddenYouTubeWebView';
 import { installErrorReporter } from './src/utils/errorReporter';
 import { ThemeProvider } from './src/utils/theme';
 import { restoreEq } from './src/utils/eq';
@@ -76,6 +77,7 @@ function AppShell() {
       </SafeAreaView>
       <NowPlaying visible={showNowPlaying} onClose={() => setShowNowPlaying(false)} />
       <HeartPrompt />
+      <HiddenYouTubeWebView />
       <StatusBar style="light" backgroundColor={theme.bgPrimary} />
     </>
   );
