@@ -23,6 +23,16 @@ const READY_MARKER = '__playfool_yt_ready__';
 
 // Extraction script that runs INSIDE the WebView. videoId and reqId are
 // injected as JSON-stringified literals for safe escaping.
+//
+// Strategy: scrape the watch page HTML. YouTube's watch page embeds the full
+// playerResponse as `var ytInitialPlayerResponse = {...};` — exactly what
+// the browser's own player consumes. Because the WebView already has real
+// YouTube cookies + visitor data, the embedded playerResponse for many
+// videos contains plain audio URLs (no signatureCipher).
+//
+// Fallback: /youtubei/v1/player POST using window.ytcfg.data_ for the real
+// INNERTUBE_API_KEY and INNERTUBE_CONTEXT (these include visitorData), so
+// the request matches what the YouTube web app sends for its own user.
 function buildExtractionScript(reqId, videoId) {
   const safeId = JSON.stringify(reqId);
   const safeVideoId = JSON.stringify(videoId);
@@ -30,72 +40,121 @@ function buildExtractionScript(reqId, videoId) {
     (function() {
       var reqId = ${safeId};
       var videoId = ${safeVideoId};
-      var clients = [
-        { name: 'WEB', version: '2.20250101.01.00', code: 1 },
-        { name: 'MWEB', version: '2.20250101.01.00', code: 2 },
-        { name: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER', version: '7.20250101.10.00', code: 85 },
-        { name: 'WEB_REMIX', version: '1.20250101.01.00', code: 67 },
-      ];
-      function tryClient(c) {
+
+      function send(payload) {
+        try { window.ReactNativeWebView.postMessage(JSON.stringify(payload)); } catch (e) {}
+      }
+
+      // Walk balanced braces to extract a JSON object that follows a marker
+      // like 'var ytInitialPlayerResponse = '. Robust against nested braces
+      // inside string values.
+      function sliceJsonObject(text, startMarker) {
+        var idx = text.indexOf(startMarker);
+        if (idx === -1) return null;
+        var start = text.indexOf('{', idx);
+        if (start === -1) return null;
+        var depth = 0, inStr = false, escape = false;
+        for (var i = start; i < text.length; i++) {
+          var c = text.charAt(i);
+          if (escape) { escape = false; continue; }
+          if (c === '\\\\') { escape = true; continue; }
+          if (c === '"') { inStr = !inStr; continue; }
+          if (inStr) continue;
+          if (c === '{') depth++;
+          else if (c === '}') {
+            depth--;
+            if (depth === 0) return text.substring(start, i + 1);
+          }
+        }
+        return null;
+      }
+
+      function pickAudio(streamingData) {
+        var formats = (streamingData && streamingData.adaptiveFormats) || [];
+        var audio = formats.filter(function(f) {
+          return f.mimeType && f.mimeType.indexOf('audio/') === 0
+            && typeof f.url === 'string' && f.url.indexOf('http') === 0;
+        });
+        if (!audio.length) {
+          var ciphered = formats.filter(function(f) {
+            return f.mimeType && f.mimeType.indexOf('audio/') === 0
+              && (f.signatureCipher || f.cipher);
+          });
+          if (ciphered.length) throw new Error('only signatureCipher (need n-decode)');
+          throw new Error('no audio formats');
+        }
+        audio.sort(function(a, b) { return (b.bitrate || 0) - (a.bitrate || 0); });
+        return audio[0].url;
+      }
+
+      // ---- Method 1: scrape /watch HTML ----
+      function viaWatchPage() {
+        return fetch('https://www.youtube.com/watch?v=' + encodeURIComponent(videoId), {
+          method: 'GET',
+          credentials: 'include',
+          headers: {
+            'Accept': 'text/html,application/xhtml+xml',
+            'Accept-Language': 'en-US,en;q=0.9',
+          },
+        }).then(function(r) {
+          if (!r.ok) throw new Error('watch HTTP ' + r.status);
+          return r.text();
+        }).then(function(html) {
+          var json = sliceJsonObject(html, 'ytInitialPlayerResponse');
+          if (!json) throw new Error('no ytInitialPlayerResponse in HTML');
+          var pr = JSON.parse(json);
+          var status = pr.playabilityStatus && pr.playabilityStatus.status;
+          if (status && status !== 'OK') throw new Error(pr.playabilityStatus.reason || status);
+          return pickAudio(pr.streamingData);
+        });
+      }
+
+      // ---- Method 2: /youtubei/v1/player POST with ytcfg-derived context ----
+      function viaInnertube() {
+        var cfg = window.ytcfg && window.ytcfg.data_;
+        if (!cfg) return Promise.reject(new Error('no ytcfg'));
+        var apiKey = cfg.INNERTUBE_API_KEY;
+        var ctx = cfg.INNERTUBE_CONTEXT;
+        if (!apiKey || !ctx) return Promise.reject(new Error('ytcfg missing api key or context'));
         var body = {
           videoId: videoId,
-          context: { client: { clientName: c.name, clientVersion: c.version, hl: 'en', gl: 'US' } },
+          context: ctx,
           contentCheckOk: true,
           racyCheckOk: true,
+          playbackContext: { contentPlaybackContext: { html5Preference: 'HTML5_PREF_WANTS' } },
         };
-        return fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+        return fetch('https://www.youtube.com/youtubei/v1/player?key=' + encodeURIComponent(apiKey) + '&prettyPrint=false', {
           method: 'POST',
+          credentials: 'include',
           headers: {
             'Content-Type': 'application/json',
-            'X-YouTube-Client-Name': String(c.code),
-            'X-YouTube-Client-Version': c.version,
+            'X-YouTube-Client-Name': String(cfg.INNERTUBE_CONTEXT_CLIENT_NAME || 1),
+            'X-YouTube-Client-Version': (ctx.client && ctx.client.clientVersion) || '2.20250101.01.00',
           },
           body: JSON.stringify(body),
-          credentials: 'include',
         }).then(function(r) {
-          if (!r.ok) throw new Error('HTTP ' + r.status);
+          if (!r.ok) throw new Error('innertube HTTP ' + r.status);
           return r.json();
         }).then(function(data) {
           var status = data.playabilityStatus && data.playabilityStatus.status;
-          if (status && status !== 'OK') {
-            throw new Error(data.playabilityStatus.reason || status);
-          }
-          var formats = (data.streamingData && data.streamingData.adaptiveFormats) || [];
-          var audio = formats.filter(function(f) {
-            return f.mimeType && f.mimeType.indexOf('audio/') === 0
-              && typeof f.url === 'string' && f.url.indexOf('http') === 0;
-          });
-          if (!audio.length) {
-            var ciphered = formats.filter(function(f) {
-              return f.mimeType && f.mimeType.indexOf('audio/') === 0
-                && (f.signatureCipher || f.cipher);
-            });
-            if (ciphered.length) throw new Error('only signatureCipher formats');
-            throw new Error('no audio formats');
-          }
-          audio.sort(function(a, b) { return (b.bitrate || 0) - (a.bitrate || 0); });
-          return audio[0].url;
+          if (status && status !== 'OK') throw new Error(data.playabilityStatus.reason || status);
+          return pickAudio(data.streamingData);
         });
       }
-      function send(payload) {
-        try {
-          window.ReactNativeWebView.postMessage(JSON.stringify(payload));
-        } catch (e) {}
-      }
+
+      // Try methods in order. Collect each error so the user sees what failed.
       var errors = [];
-      function tryNext(i) {
-        if (i >= clients.length) {
-          send({ id: reqId, error: errors.join(' | ') || 'all clients failed' });
-          return;
-        }
-        tryClient(clients[i]).then(function(url) {
+      viaWatchPage().then(function(url) {
+        send({ id: reqId, url: url });
+      }).catch(function(e1) {
+        errors.push('watch: ' + (e1 && e1.message ? e1.message : String(e1)));
+        viaInnertube().then(function(url) {
           send({ id: reqId, url: url });
-        }).catch(function(e) {
-          errors.push(clients[i].name + ': ' + (e && e.message ? e.message : String(e)));
-          tryNext(i + 1);
+        }).catch(function(e2) {
+          errors.push('innertube: ' + (e2 && e2.message ? e2.message : String(e2)));
+          send({ id: reqId, error: errors.join(' | ') });
         });
-      }
-      tryNext(0);
+      });
     })();
     true;
   `;
