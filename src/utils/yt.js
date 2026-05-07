@@ -4,6 +4,7 @@ import * as FileSystem from 'expo-file-system';
 import * as MediaLibrary from 'expo-media-library';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ensureSafFolder, getSafUri, safCreateFile, safListFiles, safDelete } from './saf';
+import { getYoutubeStreamUrl } from './youtubeStream';
 
 const API_BASE = 'https://playfool-api-production.up.railway.app/api/yt';
 const DEFAULT_TIMEOUT = 12000; // generous so a Railway cold-start can finish
@@ -54,6 +55,18 @@ export async function searchMusic(query, limit = 30) {
 }
 
 export async function getAudioStreamUrl(videoId) {
+  // First try phone-side Innertube extraction. The phone's IP is residential
+  // so YouTube doesn't bot-wall us the way it does our Railway data-center
+  // IP. When this works we don't even hit our API — the phone talks straight
+  // to youtube.com and gets a googlevideo URL.
+  try {
+    const url = await getYoutubeStreamUrl(videoId);
+    if (url) return url;
+  } catch (e) {
+    // Fall through to the API tier; the API has a layered fallback chain
+    // that may still find the stream from one of its scraper backends.
+  }
+
   // 30s — server walks several yt-dlp player clients in parallel and may
   // legitimately need longer than the default 12s on a cold Railway dyno.
   const data = await apiGet(`/stream/${videoId}`, 30000);
