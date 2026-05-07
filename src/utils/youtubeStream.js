@@ -6,14 +6,28 @@
 // As of 2025 YouTube has been forcing PoToken on the standard ANDROID/IOS
 // mobile clients; TVHTML5 and ANDROID_VR generally still pass without one.
 
-const INNERTUBE_PATH = '/youtubei/v1/player?prettyPrint=false';
+// Public Innertube API keys baked into the official YouTube apps. These are
+// hardcoded inside the published binaries, openly documented, and shared
+// across millions of installs — they are not secrets. Without them the
+// non-WEB clients return HTTP 400 "Precondition check failed" because Google's
+// API gateway rejects keyless requests for those client codes.
+const INNERTUBE_API_KEYS = {
+  WEB: 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
+  ANDROID: 'AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w',
+  IOS: 'AIzaSyB-63vPrdThhKuerbB2N_l7Kwwcxj6yUAc',
+  TVHTML5_SIMPLY_EMBEDDED_PLAYER: 'AIzaSyDCU8hByM-4DrUqRUYnGn-3llEO78bcxq8',
+  WEB_EMBEDDED_PLAYER: 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
+  WEB_REMIX: 'AIzaSyC9XL3ZjWddXya6X74dJoCTL-WEYFDNX30',
+  MWEB: 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
+};
 
 const CLIENT_NAME_TO_ID = {
   WEB: 1,
+  MWEB: 2,
   ANDROID: 3,
   IOS: 5,
+  WEB_REMIX: 67,
   TVHTML5_SIMPLY_EMBEDDED_PLAYER: 85,
-  ANDROID_VR: 28,
   WEB_EMBEDDED_PLAYER: 56,
 };
 
@@ -25,7 +39,9 @@ async function fetchInnertube(videoId, client) {
     racyCheckOk: true,
   };
   const clientId = CLIENT_NAME_TO_ID[client.clientName] || 1;
-  const res = await fetch(`https://www.youtube.com${INNERTUBE_PATH}`, {
+  const apiKey = INNERTUBE_API_KEYS[client.clientName];
+  const url = `https://www.youtube.com/youtubei/v1/player?prettyPrint=false${apiKey ? `&key=${apiKey}` : ''}`;
+  const res = await fetch(url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -43,34 +59,39 @@ async function fetchInnertube(videoId, client) {
   return res.json();
 }
 
-// Order matters — try non-PoToken-gated clients first.
+// Order matters — try clients least likely to bot-wall or PoToken-gate first.
 const CLIENTS = [
-  // TV embedded — historically the most permissive; doesn't need PoToken,
-  // returns plain URLs for most videos.
+  // TV embedded — current version, widely used by smart TVs / consoles.
   {
     clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER',
-    clientVersion: '2.0',
+    clientVersion: '7.20250101.10.00',
     platform: 'TV',
     userAgent: 'Mozilla/5.0 (PlayStation; PlayStation 4/12.00) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Safari/605.1.15',
   },
-  // Android VR (Meta Quest) — no PoToken requirement reported; plain URLs.
+  // YouTube Music client — music content frequently plays here even when
+  // standard YouTube clients refuse.
   {
-    clientName: 'ANDROID_VR',
-    clientVersion: '1.60.19',
-    androidSdkVersion: 32,
-    osName: 'Android',
-    osVersion: '12L',
-    platform: 'MOBILE',
-    userAgent: 'com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip',
+    clientName: 'WEB_REMIX',
+    clientVersion: '1.20250101.01.00',
+    platform: 'DESKTOP',
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   },
-  // Web embedded — alternative path that sometimes works when others don't.
+  // Mobile web — different gate than the native mobile apps.
+  {
+    clientName: 'MWEB',
+    clientVersion: '2.20250101.01.00',
+    platform: 'MOBILE',
+    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+  },
+  // Web embedded — alternative path; works for embeddable videos.
   {
     clientName: 'WEB_EMBEDDED_PLAYER',
     clientVersion: '1.20240530.00.00',
     platform: 'DESKTOP',
     userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
   },
-  // Standard mobile clients last — PoToken-gated more aggressively.
+  // Standard mobile clients — now PoToken-gated; with API key the request at
+  // least gets processed and returns a real status (instead of HTTP 400).
   {
     clientName: 'IOS',
     clientVersion: '19.45.4',
