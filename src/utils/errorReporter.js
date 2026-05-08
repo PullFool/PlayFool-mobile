@@ -47,17 +47,31 @@ function send(source, message, stack, extra = {}) {
     }
   }
 
+  // Discord embed limits we have to respect or the entire send is rejected
+  // with HTTP 400 (and our .catch swallows it silently): title <=256,
+  // description <=4096, field value <=1024, total <=6000.
+  const sanitizedMessage = sanitize(message);
+  const shortMessage = sanitizedMessage.replace(/\s+/g, ' ').slice(0, 80);
+  const titleText = `${source}: ${shortMessage}`.slice(0, 240);
+  const descChunks = ['**' + sanitizedMessage.slice(0, 3500) + '**'];
+  if (stack) descChunks.push('```\n' + sanitize(stack).slice(0, 500) + '\n```');
+  const description = descChunks.join('\n').slice(0, 4090);
+
   const payload = {
     username: 'PlayFool Mobile Reporter',
     embeds: [{
-      title: `Error: ${sanitize(message).slice(0, 250)}`,
-      description: stack ? '```\n' + sanitize(stack).slice(0, 1500) + '\n```' : '_No stack trace_',
+      title: titleText,
+      description: description,
       color: 15158332,
       fields: [
-        { name: 'Source', value: source, inline: true },
-        { name: 'Version', value: APP_VERSION, inline: true },
-        { name: 'Platform', value: `${Platform.OS} ${Platform.Version}`, inline: true },
-        ...Object.entries(extra).map(([k, v]) => ({ name: k, value: String(sanitize(String(v))).slice(0, 1000), inline: false })),
+        { name: 'Source', value: source.slice(0, 200), inline: true },
+        { name: 'Version', value: String(APP_VERSION).slice(0, 200), inline: true },
+        { name: 'Platform', value: `${Platform.OS} ${Platform.Version}`.slice(0, 200), inline: true },
+        ...Object.entries(extra).map(([k, v]) => ({
+          name: String(k).slice(0, 200),
+          value: String(sanitize(String(v))).slice(0, 1000) || '_empty_',
+          inline: false,
+        })),
       ],
       timestamp: new Date().toISOString(),
     }],
