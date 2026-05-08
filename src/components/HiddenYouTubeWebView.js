@@ -88,8 +88,11 @@ function buildExtractionScript(reqId, videoId) {
       }
 
       // ---- Method 1: scrape /watch HTML ----
+      // Use a relative URL so we stay same-origin regardless of whether
+      // YouTube redirected our WebView to m.youtube.com or kept us on
+      // www.youtube.com.
       function viaWatchPage() {
-        return fetch('https://www.youtube.com/watch?v=' + encodeURIComponent(videoId), {
+        return fetch('/watch?v=' + encodeURIComponent(videoId), {
           method: 'GET',
           credentials: 'include',
           headers: {
@@ -110,8 +113,23 @@ function buildExtractionScript(reqId, videoId) {
       }
 
       // ---- Method 2: /youtubei/v1/player POST with ytcfg-derived context ----
+      // ytcfg can live in different places depending on the YT page variant.
+      // Try the documented spots in order.
+      function readYtcfg() {
+        if (window.ytcfg && window.ytcfg.data_) return window.ytcfg.data_;
+        if (window.ytcfg && typeof window.ytcfg.get === 'function') {
+          try {
+            return {
+              INNERTUBE_API_KEY: window.ytcfg.get('INNERTUBE_API_KEY'),
+              INNERTUBE_CONTEXT: window.ytcfg.get('INNERTUBE_CONTEXT'),
+              INNERTUBE_CONTEXT_CLIENT_NAME: window.ytcfg.get('INNERTUBE_CONTEXT_CLIENT_NAME'),
+            };
+          } catch (e) { /* fall through */ }
+        }
+        return null;
+      }
       function viaInnertube() {
-        var cfg = window.ytcfg && window.ytcfg.data_;
+        var cfg = readYtcfg();
         if (!cfg) return Promise.reject(new Error('no ytcfg'));
         var apiKey = cfg.INNERTUBE_API_KEY;
         var ctx = cfg.INNERTUBE_CONTEXT;
@@ -123,7 +141,7 @@ function buildExtractionScript(reqId, videoId) {
           racyCheckOk: true,
           playbackContext: { contentPlaybackContext: { html5Preference: 'HTML5_PREF_WANTS' } },
         };
-        return fetch('https://www.youtube.com/youtubei/v1/player?key=' + encodeURIComponent(apiKey) + '&prettyPrint=false', {
+        return fetch('/youtubei/v1/player?key=' + encodeURIComponent(apiKey) + '&prettyPrint=false', {
           method: 'POST',
           credentials: 'include',
           headers: {
@@ -160,11 +178,29 @@ function buildExtractionScript(reqId, videoId) {
   `;
 }
 
-// Initial script that just signals to RN that the page has loaded and the
-// fetch context is available.
+// Initial script that polls the page until ytcfg appears (or a timeout
+// elapses), then signals readiness. Just firing on onLoadEnd is too early —
+// the watch page's ytInitialPlayerResponse and ytcfg.data_ are populated
+// after additional inline scripts run.
 const READY_SCRIPT = `
   (function() {
-    try { window.ReactNativeWebView.postMessage(JSON.stringify({ ready: true, marker: '${READY_MARKER}' })); } catch (e) {}
+    var deadline = Date.now() + 15000;
+    function check() {
+      var hasCfg = !!(window.ytcfg && (window.ytcfg.data_ || (typeof window.ytcfg.get === 'function' && window.ytcfg.get('INNERTUBE_API_KEY'))));
+      if (hasCfg || Date.now() > deadline) {
+        try {
+          window.ReactNativeWebView.postMessage(JSON.stringify({
+            ready: true,
+            marker: '${READY_MARKER}',
+            ytcfg: !!hasCfg,
+            origin: window.location.origin,
+          }));
+        } catch (e) {}
+        return;
+      }
+      setTimeout(check, 250);
+    }
+    check();
   })();
   true;
 `;
@@ -228,6 +264,10 @@ export default function HiddenYouTubeWebView() {
       <WebView
         ref={ref}
         source={{ uri: 'https://www.youtube.com/' }}
+        // Force the desktop YT site so the page ships with ytInitialPlayerResponse
+        // and window.ytcfg. Without an override, Android WebView's default UA
+        // makes YouTube redirect to m.youtube.com, which has neither.
+        userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         onMessage={handleMessage}
         onLoadEnd={() => {
           if (ref.current) ref.current.injectJavaScript(READY_SCRIPT);
