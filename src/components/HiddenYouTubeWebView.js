@@ -70,21 +70,35 @@ function buildExtractionScript(reqId, videoId) {
       }
 
       function pickAudio(streamingData) {
-        var formats = (streamingData && streamingData.adaptiveFormats) || [];
-        var audio = formats.filter(function(f) {
+        if (!streamingData) throw new Error('no streamingData');
+        // Look in both adaptiveFormats (DASH, audio-only) AND formats (legacy
+        // combined audio+video). Some restricted videos populate only one.
+        var adaptive = streamingData.adaptiveFormats || [];
+        var combined = streamingData.formats || [];
+        var all = adaptive.concat(combined);
+        if (!all.length) throw new Error('streamingData has no formats (keys: ' + Object.keys(streamingData).join(',') + ')');
+        // Audio-only first (better quality, smaller files), then combined.
+        var audio = adaptive.filter(function(f) {
           return f.mimeType && f.mimeType.indexOf('audio/') === 0
             && typeof f.url === 'string' && f.url.indexOf('http') === 0;
         });
-        if (!audio.length) {
-          var ciphered = formats.filter(function(f) {
-            return f.mimeType && f.mimeType.indexOf('audio/') === 0
-              && (f.signatureCipher || f.cipher);
-          });
-          if (ciphered.length) throw new Error('only signatureCipher (need n-decode)');
-          throw new Error('no audio formats');
+        if (audio.length) {
+          audio.sort(function(a, b) { return (b.bitrate || 0) - (a.bitrate || 0); });
+          return audio[0].url;
         }
-        audio.sort(function(a, b) { return (b.bitrate || 0) - (a.bitrate || 0); });
-        return audio[0].url;
+        // Fall back to plain-URL combined formats. Caller will get audio+video
+        // and just plays the audio track from the muxed file.
+        var combinedPlayable = combined.filter(function(f) {
+          return typeof f.url === 'string' && f.url.indexOf('http') === 0;
+        });
+        if (combinedPlayable.length) {
+          combinedPlayable.sort(function(a, b) { return (b.bitrate || 0) - (a.bitrate || 0); });
+          return combinedPlayable[0].url;
+        }
+        // Diagnose why nothing is usable.
+        var anyCiphered = all.some(function(f) { return f.signatureCipher || f.cipher; });
+        if (anyCiphered) throw new Error('only signatureCipher formats (need n-decode / PoToken)');
+        throw new Error('no playable formats');
       }
 
       // ---- Method 1: scrape /watch HTML ----
@@ -105,6 +119,32 @@ function buildExtractionScript(reqId, videoId) {
         }).then(function(html) {
           var json = sliceJsonObject(html, 'ytInitialPlayerResponse');
           if (!json) throw new Error('no ytInitialPlayerResponse in HTML');
+          var pr = JSON.parse(json);
+          var status = pr.playabilityStatus && pr.playabilityStatus.status;
+          if (status && status !== 'OK') throw new Error(pr.playabilityStatus.reason || status);
+          return pickAudio(pr.streamingData);
+        });
+      }
+
+      // ---- Method 1b: scrape /embed HTML ----
+      // The embed player is the no-login path designed for 3rd-party sites.
+      // Historically it returns plain audio URLs more often than the standard
+      // watch page because the embed context has different DRM rules.
+      function viaEmbedPage() {
+        return fetch('/embed/' + encodeURIComponent(videoId), {
+          method: 'GET',
+          credentials: 'include',
+          headers: {
+            'Accept': 'text/html,application/xhtml+xml',
+            'Accept-Language': 'en-US,en;q=0.9',
+          },
+        }).then(function(r) {
+          if (!r.ok) throw new Error('embed HTTP ' + r.status);
+          return r.text();
+        }).then(function(html) {
+          var json = sliceJsonObject(html, 'ytInitialPlayerResponse')
+                  || sliceJsonObject(html, '"PLAYER_VARS"');
+          if (!json) throw new Error('no ytInitialPlayerResponse in embed HTML');
           var pr = JSON.parse(json);
           var status = pr.playabilityStatus && pr.playabilityStatus.status;
           if (status && status !== 'OK') throw new Error(pr.playabilityStatus.reason || status);
@@ -162,15 +202,23 @@ function buildExtractionScript(reqId, videoId) {
 
       // Try methods in order. Collect each error so the user sees what failed.
       var errors = [];
+      function describe(prefix, e) {
+        return prefix + ': ' + (e && e.message ? e.message : String(e));
+      }
       viaWatchPage().then(function(url) {
         send({ id: reqId, url: url });
       }).catch(function(e1) {
-        errors.push('watch: ' + (e1 && e1.message ? e1.message : String(e1)));
-        viaInnertube().then(function(url) {
+        errors.push(describe('watch', e1));
+        viaEmbedPage().then(function(url) {
           send({ id: reqId, url: url });
         }).catch(function(e2) {
-          errors.push('innertube: ' + (e2 && e2.message ? e2.message : String(e2)));
-          send({ id: reqId, error: errors.join(' | ') });
+          errors.push(describe('embed', e2));
+          viaInnertube().then(function(url) {
+            send({ id: reqId, url: url });
+          }).catch(function(e3) {
+            errors.push(describe('innertube', e3));
+            send({ id: reqId, error: errors.join(' | ') });
+          });
         });
       });
     })();
