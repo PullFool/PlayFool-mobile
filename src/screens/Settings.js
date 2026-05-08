@@ -10,6 +10,7 @@ import SyncScreen from './SyncScreen';
 import { recordHeart, HEARTED_KEY as HEART_KEY } from '../utils/hearts';
 import { EQ_AVAILABLE } from '../utils/eq';
 import { setCrossfadeSeconds } from '../utils/crossfade';
+import { testWebhook } from '../utils/errorReporter';
 
 const KOFI_URL = 'https://ko-fi.com/PullFool';
 
@@ -20,6 +21,8 @@ export default function Settings() {
   const [showSync, setShowSync] = useState(false);
   const [hasHearted, setHasHearted] = useState(false);
   const [crossfade, setCrossfade] = useState(0);
+  const [webhookStatus, setWebhookStatus] = useState('');
+  const [webhookTesting, setWebhookTesting] = useState(false);
 
   useEffect(() => {
     AsyncStorage.getItem(HEART_KEY).then((v) => setHasHearted(v === '1'));
@@ -35,6 +38,20 @@ export default function Settings() {
   };
 
   const onHeartTap = () => setShowSupport(true);
+
+  const runWebhookTest = async () => {
+    setWebhookTesting(true);
+    setWebhookStatus('Testing…');
+    const r = await testWebhook();
+    if (!r.configured) {
+      setWebhookStatus('Not configured — EXPO_PUBLIC_DISCORD_WEBHOOK secret missing in build');
+    } else if (r.ok) {
+      setWebhookStatus(`OK — Discord accepted the webhook (HTTP ${r.status}). Check the channel.`);
+    } else {
+      setWebhookStatus(`Failed — ${r.error}`);
+    }
+    setWebhookTesting(false);
+  };
 
   const handleLike = async () => {
     const version = Application.nativeApplicationVersion || 'dev';
@@ -140,6 +157,25 @@ export default function Settings() {
         </View>
       </View>
 
+      <View style={styles.section}>
+        <Text style={styles.label}>Diagnostics</Text>
+        <Text style={styles.help}>
+          Send a test message to the Discord error webhook so you can see whether
+          error reports are actually getting through.
+        </Text>
+        <TouchableOpacity
+          style={styles.themeBtn}
+          onPress={runWebhookTest}
+          disabled={webhookTesting}
+        >
+          <Ionicons name="paper-plane" size={16} color={theme.textPrimary} />
+          <Text style={styles.themeBtnText}>{webhookTesting ? 'Sending…' : 'Test Discord webhook'}</Text>
+        </TouchableOpacity>
+        {webhookStatus ? (
+          <Text style={styles.webhookStatus} selectable>{webhookStatus}</Text>
+        ) : null}
+      </View>
+
       <Text style={styles.footer}>
         Made by PullFool · v{Application.nativeApplicationVersion || 'dev'}
       </Text>
@@ -180,4 +216,5 @@ const styles = StyleSheet.create({
   cfPillActive: { backgroundColor: theme.green, borderColor: theme.green },
   cfPillText: { color: theme.textSecondary, fontSize: 12, fontWeight: '600' },
   cfPillTextActive: { color: '#000' },
+  webhookStatus: { color: theme.textSecondary, fontSize: 12, marginTop: 10, lineHeight: 16 },
 });
