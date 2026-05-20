@@ -39,6 +39,29 @@ const READY_MARKER = '__playfool_yt_ready__';
 const POTOKEN_TTL_MS = 10 * 60 * 1000;
 const REQUEST_KEY = 'O43z0dpjhgX20SCx4KAo'; // YouTube's well-known BotGuard request key
 
+// youtube.com enforces Trusted Types (require-trusted-types-for 'script'),
+// which blocks the new Function()/eval() that bgutils-js needs to run the
+// BotGuard interpreter. We register a permissive 'default' Trusted Types
+// policy BEFORE YouTube's own scripts run — once a 'default' policy exists,
+// every eval()/new Function() string is routed through it automatically.
+// This must run first (injectedJavaScriptBeforeContentLoaded) to win the
+// race for the 'default' policy name.
+const TRUSTED_TYPES_SHIM = `
+  (function() {
+    try {
+      if (window.trustedTypes && window.trustedTypes.createPolicy && !window.__playfoolTT) {
+        window.__playfoolTT = window.trustedTypes.createPolicy('default', {
+          createScript: function(s) { return s; },
+          createHTML: function(s) { return s; },
+          createScriptURL: function(s) { return s; },
+        });
+      }
+    } catch (e) {
+      window.__playfoolTTErr = (e && e.message) ? e.message : String(e);
+    }
+  })();
+`;
+
 // Initial readiness signal: page has loaded AND ytcfg is available AND the
 // bgutils bundle has set window.BG. Polls because all three settle async.
 const READY_SCRIPT = `
@@ -54,6 +77,8 @@ const READY_SCRIPT = `
             marker: '${READY_MARKER}',
             ytcfg: !!hasCfg,
             bg: !!hasBG,
+            tt: !!window.__playfoolTT,
+            ttErr: window.__playfoolTTErr || '',
             origin: window.location.origin,
           }));
         } catch (e) {}
@@ -279,7 +304,7 @@ function waitForReady(maxWaitMs = 20000) {
         const d = readyDiag;
         reject(new Error(
           d.signaled
-            ? `not ready (ytcfg=${d.ytcfg}, bg=${d.bg}, origin=${d.origin || '?'})`
+            ? `not ready (ytcfg=${d.ytcfg}, bg=${d.bg}, tt=${d.tt}${d.ttErr ? ' ttErr=' + d.ttErr : ''})`
             : 'not ready (youtube.com never finished loading in WebView)'
         ));
       }
@@ -321,6 +346,8 @@ export default function HiddenYouTubeWebView() {
         signaled: true,
         ytcfg: !!data.ytcfg,
         bg: !!data.bg,
+        tt: !!data.tt,
+        ttErr: data.ttErr || '',
         origin: data.origin || '',
       };
       isPageReady = !!(data.ytcfg && data.bg);
@@ -367,16 +394,17 @@ export default function HiddenYouTubeWebView() {
         // and ytcfg. Default Android WebView UA triggers the m.youtube.com
         // redirect, which has neither.
         userAgent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        // Preload bgutils-js so window.BG is available before YT scripts run.
-        injectedJavaScriptBeforeContentLoaded={BGUTILS_CODE + '\ntrue;'}
+        // Before YT's own scripts run: claim the 'default' Trusted Types
+        // policy (so bgutils-js's new Function() works), then preload
+        // bgutils-js so window.BG is ready.
+        injectedJavaScriptBeforeContentLoaded={TRUSTED_TYPES_SHIM + BGUTILS_CODE + '\ntrue;'}
         onMessage={handleMessage}
         onLoadEnd={() => {
           if (!ref.current) return;
-          // Re-inject bgutils-js as a fallback — injectedJavaScriptBefore-
-          // ContentLoaded is unreliable on some Android WebView builds, so
-          // we also load it here once the document exists. Harmless if it
-          // already ran (the IIFE just re-assigns window.BG).
-          ref.current.injectJavaScript(BGUTILS_CODE + '\ntrue;');
+          // Re-inject as a fallback — injectedJavaScriptBeforeContentLoaded
+          // is unreliable on some Android WebView builds. Harmless to re-run
+          // (TT policy guarded by __playfoolTT, bgutils IIFE just reassigns).
+          ref.current.injectJavaScript(TRUSTED_TYPES_SHIM + BGUTILS_CODE + '\ntrue;');
           ref.current.injectJavaScript(READY_SCRIPT);
         }}
         javaScriptEnabled
