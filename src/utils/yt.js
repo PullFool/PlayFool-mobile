@@ -5,7 +5,7 @@ import * as MediaLibrary from 'expo-media-library';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ensureSafFolder, getSafUri, safCreateFile, safListFiles, safDelete } from './saf';
 import { getYoutubeStreamUrl } from './youtubeStream';
-import { extractStreamUrlViaWebView, isWebViewExtractorReady } from '../components/HiddenYouTubeWebView';
+import { extractStreamUrlViaWebView } from '../components/HiddenYouTubeWebView';
 
 const API_BASE = 'https://playfool-api-production.up.railway.app/api/yt';
 const DEFAULT_TIMEOUT = 12000; // generous so a Railway cold-start can finish
@@ -56,21 +56,17 @@ export async function searchMusic(query, limit = 30) {
 }
 
 export async function getAudioStreamUrl(videoId) {
-  // 1. Hidden WebView extractor — runs the Innertube call inside a real
-  //    Chrome WebView at youtube.com, so the request carries real cookies +
-  //    visitor data + Chrome fingerprint. Bypasses the bot wall that hits our
-  //    raw fetch() and yt-dlp on data-center IPs.
+  // 1. Hidden WebView extractor — mints a PoToken via bgutils-js then runs
+  //    the Innertube call inside a real Chrome WebView at youtube.com. The
+  //    extractor waits internally for the WebView warmup, so we always try
+  //    it (no pre-check) and let it report a precise reason on failure.
   let webViewErr = '';
-  if (isWebViewExtractorReady()) {
-    try {
-      const url = await extractStreamUrlViaWebView(videoId);
-      if (url) return url;
-      webViewErr = 'WebView returned empty URL';
-    } catch (e) {
-      webViewErr = e.message || String(e);
-    }
-  } else {
-    webViewErr = 'WebView not ready';
+  try {
+    const url = await extractStreamUrlViaWebView(videoId);
+    if (url) return url;
+    webViewErr = 'WebView returned empty URL';
+  } catch (e) {
+    webViewErr = e.message || String(e);
   }
 
   // 2. Phone-side raw Innertube — works occasionally for clients that don't

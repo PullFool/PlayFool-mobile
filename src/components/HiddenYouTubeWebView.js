@@ -31,6 +31,10 @@ let mintInFlight = null;
 const pending = new Map();
 let nextId = 1;
 
+// Last readiness diagnostics — so a "not ready" failure can say WHICH part
+// (page load / ytcfg / bgutils-js) didn't come up.
+let readyDiag = { signaled: false, ytcfg: false, bg: false, origin: '' };
+
 const READY_MARKER = '__playfool_yt_ready__';
 const POTOKEN_TTL_MS = 10 * 60 * 1000;
 const REQUEST_KEY = 'O43z0dpjhgX20SCx4KAo'; // YouTube's well-known BotGuard request key
@@ -259,9 +263,33 @@ export function isWebViewExtractorReady() {
   return isPageReady;
 }
 
+// Wait for the WebView to become ready instead of failing instantly — the
+// download might just be racing the ~10-20s warmup. If it never readies,
+// reject with a diagnostic naming the part that didn't come up.
+function waitForReady(maxWaitMs = 20000) {
+  if (isPageReady) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const start = Date.now();
+    const iv = setInterval(() => {
+      if (isPageReady) {
+        clearInterval(iv);
+        resolve();
+      } else if (Date.now() - start > maxWaitMs) {
+        clearInterval(iv);
+        const d = readyDiag;
+        reject(new Error(
+          d.signaled
+            ? `not ready (ytcfg=${d.ytcfg}, bg=${d.bg}, origin=${d.origin || '?'})`
+            : 'not ready (youtube.com never finished loading in WebView)'
+        ));
+      }
+    }, 300);
+  });
+}
+
 export async function extractStreamUrlViaWebView(videoId, timeoutMs = 25000) {
   if (!webViewRef) throw new Error('WebView not mounted');
-  if (!isPageReady) throw new Error('WebView not ready (still loading)');
+  await waitForReady();
   if (!isCachedPoTokenFresh()) {
     await mintPoToken();
   }
@@ -289,6 +317,12 @@ export default function HiddenYouTubeWebView() {
     let data;
     try { data = JSON.parse(event.nativeEvent.data); } catch (e) { return; }
     if (data && data.ready && data.marker === READY_MARKER) {
+      readyDiag = {
+        signaled: true,
+        ytcfg: !!data.ytcfg,
+        bg: !!data.bg,
+        origin: data.origin || '',
+      };
       isPageReady = !!(data.ytcfg && data.bg);
       // Pre-warm a PoToken in the background as soon as the WebView is
       // fully ready, so the first download doesn't pay for the BotGuard
@@ -337,7 +371,13 @@ export default function HiddenYouTubeWebView() {
         injectedJavaScriptBeforeContentLoaded={BGUTILS_CODE + '\ntrue;'}
         onMessage={handleMessage}
         onLoadEnd={() => {
-          if (ref.current) ref.current.injectJavaScript(READY_SCRIPT);
+          if (!ref.current) return;
+          // Re-inject bgutils-js as a fallback — injectedJavaScriptBefore-
+          // ContentLoaded is unreliable on some Android WebView builds, so
+          // we also load it here once the document exists. Harmless if it
+          // already ran (the IIFE just re-assigns window.BG).
+          ref.current.injectJavaScript(BGUTILS_CODE + '\ntrue;');
+          ref.current.injectJavaScript(READY_SCRIPT);
         }}
         javaScriptEnabled
         domStorageEnabled
