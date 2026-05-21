@@ -429,30 +429,6 @@ export default function NowPlaying({ visible, onClose }) {
               )}
               {lyrics.status === 'ok' && (
                 <>
-                  {/* Compact player so the user can pause/skip while reading lyrics */}
-                  <View style={styles.miniPlayer}>
-                    {currentSong?.cover ? (
-                      <Image source={{ uri: currentSong.cover }} style={styles.miniThumb} />
-                    ) : (
-                      <View style={[styles.miniThumb, styles.coverFallback]}>
-                        <Ionicons name="musical-notes" size={20} color={theme.green} />
-                      </View>
-                    )}
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.miniTitle} numberOfLines={1}>
-                        {currentSong?.title || ''}
-                      </Text>
-                      <Text style={styles.miniArtist} numberOfLines={1}>
-                        {currentSong?.artist || 'PlayFool'}
-                      </Text>
-                    </View>
-                    <TouchableOpacity onPress={togglePlayPause} style={styles.miniBtn} hitSlop={8}>
-                      <Ionicons name={isPlaying ? 'pause' : 'play'} size={22} color={theme.textPrimary} />
-                    </TouchableOpacity>
-                    <TouchableOpacity onPress={skipNext} style={styles.miniBtn} hitSlop={8}>
-                      <Ionicons name="play-skip-forward" size={22} color={theme.textPrimary} />
-                    </TouchableOpacity>
-                  </View>
                   {lyrics.lines && lyrics.lines.length > 0 ? (
                     <KaraokeLyrics lines={lyrics.lines} position={position} onSeek={seekTo} />
                   ) : (
@@ -588,16 +564,6 @@ const styles = StyleSheet.create({
   karaokeLinePast: {
     color: 'rgba(255, 255, 255, 0.22)',
   },
-  miniPlayer: {
-    flexDirection: 'row', alignItems: 'center', gap: 12,
-    paddingVertical: 10, paddingHorizontal: 4,
-    marginBottom: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border,
-  },
-  miniThumb: { width: 44, height: 44, borderRadius: 6, backgroundColor: theme.bgSurface },
-  miniTitle: { color: theme.textPrimary, fontSize: 14, fontWeight: '700' },
-  miniArtist: { color: theme.textMuted, fontSize: 12, marginTop: 2 },
-  miniBtn: { padding: 6 },
   matchBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     marginTop: 16, paddingVertical: 8, paddingHorizontal: 12,
