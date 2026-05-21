@@ -13,7 +13,7 @@ const fmt = (s) => {
 };
 
 export default function Player({ onExpand }) {
-  const { currentSong, isPlaying, position, duration, togglePlayPause, skipNext, skipPrev, seekTo } = usePlayer();
+  const { currentSong, isPlaying, position, duration, togglePlayPause, skipNext, skipPrev } = usePlayer();
   const [showLyrics, setShowLyrics] = useState(false);
 
   if (!currentSong) return null;
@@ -37,13 +37,11 @@ export default function Player({ onExpand }) {
           </View>
         </TouchableOpacity>
         <View style={styles.controls}>
-          <TouchableOpacity onPress={skipPrev}><Ionicons name="play-skip-back" size={22} color={theme.textPrimary} /></TouchableOpacity>
-          <TouchableOpacity onPress={() => seekTo(Math.max(0, position - 10))}><Ionicons name="play-back" size={20} color={theme.textPrimary} /></TouchableOpacity>
+          <TouchableOpacity onPress={skipPrev}><Ionicons name="play-skip-back" size={24} color={theme.textPrimary} /></TouchableOpacity>
           <TouchableOpacity onPress={togglePlayPause} style={styles.playBtn}>
             <Ionicons name={isPlaying ? 'pause' : 'play'} size={20} color="#000" />
           </TouchableOpacity>
-          <TouchableOpacity onPress={() => seekTo(position + 10)}><Ionicons name="play-forward" size={20} color={theme.textPrimary} /></TouchableOpacity>
-          <TouchableOpacity onPress={skipNext}><Ionicons name="play-skip-forward" size={22} color={theme.textPrimary} /></TouchableOpacity>
+          <TouchableOpacity onPress={skipNext}><Ionicons name="play-skip-forward" size={24} color={theme.textPrimary} /></TouchableOpacity>
         </View>
       </View>
       <View style={styles.bottomRow}>

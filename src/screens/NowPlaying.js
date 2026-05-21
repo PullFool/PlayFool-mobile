@@ -156,7 +156,6 @@ export default function NowPlaying({ visible, onClose }) {
   // Seek-bar drag state.
   const [seeking, setSeeking] = useState(false);
   const [seekValue, setSeekValue] = useState(0);
-  const [trackWidth, setTrackWidth] = useState(0);
 
   // Reset to upnext tab whenever the modal opens
   useEffect(() => { if (visible) setTab('upnext'); }, [visible]);
@@ -213,31 +212,42 @@ export default function NowPlaying({ visible, onClose }) {
   // live playback position, so the thumb tracks the finger smoothly.
   const progress = seeking ? seekValue : livePosition;
 
-  // Refs so the PanResponder (created once) always reads fresh layout/duration.
-  const seekRef = useRef({ width: 0, duration: 0 });
-  seekRef.current.width = trackWidth;
+  // Seek-bar geometry measured in WINDOW coordinates. Using absolute screen
+  // X (gestureState.x0 / moveX) instead of nativeEvent.locationX avoids the
+  // flicker that happened when the finger passed over the thumb child view —
+  // locationX would then report relative to that 14px view.
+  const trackRef = useRef(null);
+  const seekRef = useRef({ x: 0, width: 1, duration: 0 });
   seekRef.current.duration = duration;
+
+  const measureTrack = () => {
+    const node = trackRef.current;
+    if (node && node.measureInWindow) {
+      node.measureInWindow((x, y, w) => {
+        if (w > 0) { seekRef.current.x = x; seekRef.current.width = w; }
+      });
+    }
+  };
+
+  const seekFraction = (screenX) => {
+    const { x, width } = seekRef.current;
+    return Math.min(1, Math.max(0, (screenX - x) / (width || 1)));
+  };
 
   const seekPan = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: (e) => {
-        const w = seekRef.current.width || 1;
-        const f = Math.min(1, Math.max(0, e.nativeEvent.locationX / w));
+      onPanResponderGrant: (e, g) => {
         setSeeking(true);
-        setSeekValue(f);
+        setSeekValue(seekFraction(g.x0));
       },
-      onPanResponderMove: (e) => {
-        const w = seekRef.current.width || 1;
-        const f = Math.min(1, Math.max(0, e.nativeEvent.locationX / w));
-        setSeekValue(f);
+      onPanResponderMove: (e, g) => {
+        setSeekValue(seekFraction(g.moveX));
       },
-      onPanResponderRelease: (e) => {
-        const w = seekRef.current.width || 1;
-        const f = Math.min(1, Math.max(0, e.nativeEvent.locationX / w));
-        const secs = f * (seekRef.current.duration || 0);
-        seekTo(secs);
+      onPanResponderRelease: (e, g) => {
+        const f = seekFraction(g.moveX);
+        seekTo(f * (seekRef.current.duration || 0));
         setSeeking(false);
       },
       onPanResponderTerminate: () => setSeeking(false),
@@ -279,8 +289,9 @@ export default function NowPlaying({ visible, onClose }) {
           <View style={styles.progressRow}>
             <Text style={styles.time}>{fmt(seeking ? seekValue * duration : position)}</Text>
             <View
+              ref={trackRef}
               style={styles.progressTouch}
-              onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
+              onLayout={measureTrack}
               {...seekPan.panHandlers}
             >
               <View style={styles.progressTrack}>
