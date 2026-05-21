@@ -38,8 +38,9 @@ async function fetchLyricsWithMatch(title, rejectedIds) {
     .filter((r) => !rejectedSet.has(String(r.id)));
   if (!eligible.length) return null;
 
-  // Prefer synced over plain.
-  const pick = eligible.find((r) => r.syncedLyrics) || eligible[0];
+  // Trust lrclib's relevance order — take the top result rather than the
+  // first synced one, which could be a wrong song that just has timing.
+  const pick = eligible[0];
   const text = pick.syncedLyrics || pick.plainLyrics || '';
   if (!text.trim()) return null;
   return {

@@ -72,7 +72,10 @@ async function loadLyricsForSong(song) {
     .map((r, i) => ({ ...r, _index: i }))
     .filter((r) => !rejectedSet.has(String(r.id)));
   if (!eligible.length) return { status: rejected.length ? 'noMore' : 'notfound' };
-  const pick = eligible.find((r) => r.syncedLyrics) || eligible[0];
+  // Trust lrclib's relevance order — take the top result. Hunting for the
+  // first synced result instead used to surface a wrong song just because
+  // it happened to have timed lyrics.
+  const pick = eligible[0];
   const synced = pick.syncedLyrics ? parseSyncedLyrics(pick.syncedLyrics) : null;
   const plain = pick.plainLyrics
     || (pick.syncedLyrics && pick.syncedLyrics.replace(/\[\d+:\d+\.\d+\]/g, '').trim())

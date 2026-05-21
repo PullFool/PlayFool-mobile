@@ -52,6 +52,19 @@ export function lyricsKey(title) {
   return cleanTitle(title).toLowerCase();
 }
 
+// Parse a cleaned title into { artist, track } if it has an "Artist - Title"
+// shape — used for the precise /api/get lookup.
+export function parseArtistTitle(title) {
+  const cleaned = cleanTitle(title);
+  const idx = cleaned.indexOf(' - ');
+  if (idx > 0) {
+    const artist = cleaned.slice(0, idx).trim();
+    const track = cleaned.slice(idx + 3).trim();
+    if (artist && track) return { artist, track };
+  }
+  return null;
+}
+
 async function searchLrclib(query) {
   try {
     const res = await fetch(`${LRCLIB_BASE}/search?q=${encodeURIComponent(query)}`, {
@@ -66,9 +79,32 @@ async function searchLrclib(query) {
   }
 }
 
-// Walk the search variants the way the desktop app does — return the first
-// variant that yields any lrclib results. Returns [] when nothing matches.
+// Precise lookup — lrclib /api/get with an exact artist + track. Returns the
+// single match or null. This is far more accurate than the fuzzy search,
+// which returns *something* for almost any query.
+async function getLrclib(artist, track) {
+  try {
+    const res = await fetch(
+      `${LRCLIB_BASE}/get?artist_name=${encodeURIComponent(artist)}&track_name=${encodeURIComponent(track)}`,
+      { headers: { Accept: 'application/json' } },
+    );
+    if (!res.ok) return null;
+    const one = await res.json();
+    return (one && one.id) ? one : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Fetch lrclib results for a song. Precise /api/get FIRST when the title
+// parses to "Artist - Track" (accurate), then the fuzzy multi-variant
+// /api/search as a fallback for names that don't parse cleanly.
 export async function fetchLrclibResults(title) {
+  const at = parseArtistTitle(title);
+  if (at) {
+    const exact = await getLrclib(at.artist, at.track);
+    if (exact) return [exact];
+  }
   for (const query of getSearchVariants(title)) {
     const results = await searchLrclib(query);
     if (results) return results;
