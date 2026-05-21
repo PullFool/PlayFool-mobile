@@ -138,7 +138,7 @@ export async function downloadAudio(video, onProgress) {
 
 // Match songs by their base name with the same normalization sync.js uses.
 // Same file showing up in multiple storage sources gets collapsed.
-function localSongKey(name) {
+export function localSongKey(name) {
   if (!name) return '';
   return String(name)
     .replace(/\.[^.]+$/, '')

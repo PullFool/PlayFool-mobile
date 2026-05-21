@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { theme } from '../utils/theme';
-import { listLocalAudio, deleteLocalAudio, scanPhoneAudio } from '../utils/yt';
+import { listLocalAudio, deleteLocalAudio, scanPhoneAudio, localSongKey } from '../utils/yt';
 import { usePlayer } from '../context/PlayerContext';
 import { reportError } from '../utils/errorReporter';
 import AddToPlaylistModal from '../components/AddToPlaylistModal';
@@ -58,12 +58,16 @@ export default function MyMusic() {
   // Reload every time the tab is focused so new YouTube downloads appear immediately
   useFocusEffect(useCallback(() => { load(); }, [load]));
 
-  // Merge downloaded + scanned (downloaded first), de-dupe by url
+  // Merge downloaded + scanned (downloaded first), de-dupe by normalized
+  // song name. PlayFool's own downloads show up in BOTH lists — once from
+  // the SAF folder and again from the phone-wide scan — with different URIs
+  // each time, so a url-based de-dupe let the same song through twice.
   const seen = new Set();
   const songs = [];
   for (const s of [...downloaded, ...scanned]) {
-    if (seen.has(s.url)) continue;
-    seen.add(s.url);
+    const key = localSongKey(s.title || '') || s.url;
+    if (seen.has(key)) continue;
+    seen.add(key);
     songs.push(s);
   }
 
