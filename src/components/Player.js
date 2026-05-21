@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Image } from 'react-native';
+import React, { useState, useRef } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Image, PanResponder } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { usePlayer } from '../context/PlayerContext';
 import { theme } from '../utils/theme';
@@ -13,16 +13,61 @@ const fmt = (s) => {
 };
 
 export default function Player({ onExpand }) {
-  const { currentSong, isPlaying, position, duration, togglePlayPause, skipNext, skipPrev } = usePlayer();
+  const { currentSong, isPlaying, position, duration, togglePlayPause, skipNext, skipPrev, seekTo } = usePlayer();
   const [showLyrics, setShowLyrics] = useState(false);
+  const [seeking, setSeeking] = useState(false);
+  const [seekValue, setSeekValue] = useState(0);
+
+  // Draggable seek bar — measured in window coords, driven by absolute
+  // screen X (gestureState) so it doesn't flicker over the thumb.
+  const trackRef = useRef(null);
+  const seekRef = useRef({ x: 0, width: 1, duration: 0 });
+  seekRef.current.duration = duration;
+
+  const measureTrack = () => {
+    const node = trackRef.current;
+    if (node && node.measureInWindow) {
+      node.measureInWindow((x, y, w) => {
+        if (w > 0) { seekRef.current.x = x; seekRef.current.width = w; }
+      });
+    }
+  };
+  const seekFraction = (screenX) => {
+    const { x, width } = seekRef.current;
+    return Math.min(1, Math.max(0, (screenX - x) / (width || 1)));
+  };
+  const seekPan = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (e, g) => { setSeeking(true); setSeekValue(seekFraction(g.x0)); },
+      onPanResponderMove: (e, g) => { setSeekValue(seekFraction(g.moveX)); },
+      onPanResponderRelease: (e, g) => {
+        const f = seekFraction(g.moveX);
+        seekTo(f * (seekRef.current.duration || 0));
+        setSeeking(false);
+      },
+      onPanResponderTerminate: () => setSeeking(false),
+    })
+  ).current;
 
   if (!currentSong) return null;
-  const progress = duration ? (position / duration) * 100 : 0;
+  const progress = seeking
+    ? seekValue
+    : (duration ? Math.min(1, position / duration) : 0);
 
   return (
     <View style={styles.bar}>
-      <View style={styles.progress}>
-        <View style={[styles.progressFill, { width: `${progress}%` }]} />
+      <View
+        ref={trackRef}
+        style={styles.progressTouch}
+        onLayout={measureTrack}
+        {...seekPan.panHandlers}
+      >
+        <View style={styles.progress}>
+          <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+        </View>
+        <View style={[styles.progressThumb, { left: `${progress * 100}%` }]} />
       </View>
       <View style={styles.row}>
         <TouchableOpacity onPress={onExpand} style={styles.tappable}>
@@ -58,8 +103,15 @@ export default function Player({ onExpand }) {
 
 const styles = StyleSheet.create({
   bar: { backgroundColor: theme.bgSecondary, borderTopWidth: 1, borderTopColor: theme.border, paddingHorizontal: 12, paddingVertical: 8 },
-  progress: { height: 3, backgroundColor: theme.bgSurface, borderRadius: 2, marginBottom: 8 },
+  progressTouch: { height: 18, justifyContent: 'center', marginBottom: 2 },
+  progress: { height: 3, backgroundColor: theme.bgSurface, borderRadius: 2 },
   progressFill: { height: '100%', backgroundColor: theme.green, borderRadius: 2 },
+  progressThumb: {
+    position: 'absolute',
+    width: 11, height: 11, borderRadius: 6,
+    backgroundColor: theme.green,
+    marginLeft: -5.5, top: 3.5,
+  },
   row: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   tappable: { flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1, minWidth: 0 },
   art: { width: 40, height: 40, borderRadius: 4, backgroundColor: theme.bgSurface, alignItems: 'center', justifyContent: 'center' },
