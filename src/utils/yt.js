@@ -5,6 +5,7 @@ import * as MediaLibrary from 'expo-media-library';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ensureSafFolder, getSafUri, safCreateFile, safListFiles, safDelete } from './saf';
 import { getYoutubeStreamUrl } from './youtubeStream';
+import { loadCoverMap } from './sync';
 import { extractStreamUrlViaWebView } from '../components/HiddenYouTubeWebView';
 
 const API_BASE = 'https://playfool-api-production.up.railway.app/api/yt';
@@ -158,10 +159,14 @@ function localSongKey(name) {
 export async function listLocalAudio() {
   const out = [];
   const seen = new Set();
+  // Cover art pulled in by cloud sync, keyed by songKey. Lets synced songs
+  // (which have no embedded/known artwork) show a thumbnail.
+  const coverMap = await loadCoverMap();
   const push = (entry) => {
     const key = localSongKey(entry.title || entry.url || '');
     if (key && seen.has(key)) return;
     if (key) seen.add(key);
+    if (key && !entry.cover && coverMap[key]) entry.cover = coverMap[key];
     out.push(entry);
   };
 

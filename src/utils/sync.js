@@ -12,6 +12,14 @@ const RELAY_URL = 'https://playfool-sync.playfool-sync.workers.dev';
 const PAIR_KEY = 'playfool_mobile_sync_pair';
 const ALBUM_NAME = 'PlayFool';
 
+// App-private folder for synced cover art. documentDirectory is NOT scanned
+// by the phone's gallery/MediaStore, so these images never show up in Photos.
+const COVERS_DIR = FileSystem.documentDirectory + 'PlayFool-covers/';
+
+function isCoverFile(name) {
+  return /\.(jpe?g|png|webp)$/i.test(String(name || ''));
+}
+
 export async function getPairing() {
   try {
     const raw = await AsyncStorage.getItem(PAIR_KEY);
@@ -130,16 +138,55 @@ function dedupByKey(list, keyFn) {
 }
 
 // Diff: cloud-only → toDownload; local-only → toUpload. Match by song name.
+// Cover-art files (.jpg/.png) are pulled out of the song diff and indexed
+// by songKey so a downloaded song can grab its matching cover.
 export async function planSync(pair) {
   const cloudRaw = await listCloud(pair);
   const localRaw = await listLocal();
-  const cloud = dedupByKey(cloudRaw, (f) => songKey(f.name));
+
+  // Separate cover-art entries from songs.
+  const cloudCovers = cloudRaw.filter((f) => isCoverFile(f.name));
+  const cloudSongs = cloudRaw.filter((f) => !isCoverFile(f.name));
+  const coverByKey = {};
+  for (const c of cloudCovers) coverByKey[songKey(c.name)] = c;
+
+  const cloud = dedupByKey(cloudSongs, (f) => songKey(f.name));
   const local = dedupByKey(localRaw, (f) => songKey(f.name));
   const localSet = new Set(local.map((f) => songKey(f.name)));
   const cloudSet = new Set(cloud.map((f) => songKey(f.name)));
   const toDownload = cloud.filter((f) => !localSet.has(songKey(f.name)));
   const toUpload = local.filter((f) => !cloudSet.has(songKey(f.name)));
-  return { cloud, local, toDownload, toUpload };
+  return { cloud, local, toDownload, toUpload, coverByKey };
+}
+
+// Read the synced cover-art folder once → { songKey: fileUri }. listLocalAudio
+// uses this to attach a thumbnail to songs that came in via cloud sync.
+export async function loadCoverMap() {
+  const map = {};
+  try {
+    const info = await FileSystem.getInfoAsync(COVERS_DIR);
+    if (!info.exists) return map;
+    const files = await FileSystem.readDirectoryAsync(COVERS_DIR);
+    for (const fn of files) {
+      if (!/\.jpg$/i.test(fn)) continue;
+      const key = decodeURIComponent(fn.replace(/\.jpg$/i, ''));
+      map[key] = COVERS_DIR + fn;
+    }
+  } catch (e) {}
+  return map;
+}
+
+// Download a cover-art file into the app-private covers folder, named by the
+// song's key so listLocalAudio can pair it back up. Best-effort.
+async function downloadCover(pair, coverFile, key) {
+  if (!coverFile || !key) return;
+  try {
+    await FileSystem.makeDirectoryAsync(COVERS_DIR, { intermediates: true }).catch(() => {});
+    const dest = COVERS_DIR + encodeURIComponent(key) + '.jpg';
+    const url = `${pair.base}/v1/file/${coverFile.id}?code=${encodeURIComponent(pair.code)}`;
+    const dl = FileSystem.createDownloadResumable(url, dest);
+    await dl.downloadAsync();
+  } catch (e) { /* cover is optional — never fail the sync over it */ }
 }
 
 async function downloadOne(pair, file, onBytes) {
@@ -237,6 +284,10 @@ export async function runSync(pair, plan, onProgress, isCancelled) {
       await downloadOne(pair, f, (bytes, totalBytes) => {
         tick({ current: f.name, dir: 'down', bytes, totalBytes });
       });
+      // Pull the matching cover art (if the desktop uploaded one) so the
+      // song shows a thumbnail in My Music.
+      const key = songKey(f.name);
+      await downloadCover(pair, plan.coverByKey && plan.coverByKey[key], key);
     } catch (e) {
       errors.push({ direction: 'down', file: f.name, error: e.message });
       reportError('sync.download', e, { file: f.name });
