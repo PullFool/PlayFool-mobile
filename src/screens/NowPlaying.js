@@ -147,7 +147,7 @@ export default function NowPlaying({ visible, onClose }) {
     shuffle, repeat,
     togglePlayPause, skipNext, skipPrev, seekTo,
     toggleShuffle, toggleRepeat,
-    removeFromQueue, playFromQueue,
+    removeFromQueue, playFromQueue, playAtIndex,
   } = usePlayer();
 
   const [tab, setTab] = useState('upnext');
@@ -192,14 +192,14 @@ export default function NowPlaying({ visible, onClose }) {
     );
   };
 
+  // The queue shows the WHOLE playlist — already-played, current, and
+  // upcoming — so the user can tap back to a finished song. Each playlist
+  // row keeps its real index, so numbering never shifts as songs play.
   const upcoming = (() => {
     const list = [];
     for (const q of queue) list.push({ ...q, _from: 'queue' });
-    if (currentIndex >= 0) {
-      // Show the whole rest of the playlist, not just the next 30.
-      for (let i = currentIndex + 1; i < songs.length; i++) {
-        list.push({ ...songs[i], _from: 'songs', _idx: i });
-      }
+    for (let i = 0; i < songs.length; i++) {
+      list.push({ ...songs[i], _from: 'songs', _idx: i });
     }
     return list;
   })();
@@ -296,27 +296,51 @@ export default function NowPlaying({ visible, onClose }) {
               {upcoming.length === 0 ? (
                 <Text style={styles.empty}>Nothing up next.</Text>
               ) : (
-                upcoming.map((s, i) => (
-                  <View key={`${s.id}-${i}`} style={styles.queueRow}>
-                    <Text style={styles.queueNum}>{i + 1}</Text>
-                    <View style={styles.queueInfo}>
-                      <Text style={styles.queueTitle} numberOfLines={1}>{s.title}</Text>
-                      <Text style={styles.queueArtist} numberOfLines={1}>
-                        {s.artist || (s._from === 'queue' ? 'In queue' : 'PlayFool')}
-                      </Text>
-                    </View>
-                    {s._from === 'queue' && (
-                      <>
-                        <TouchableOpacity onPress={() => playFromQueue(i)} hitSlop={8} style={styles.queueBtn}>
-                          <Ionicons name="play" size={18} color={theme.green} />
-                        </TouchableOpacity>
-                        <TouchableOpacity onPress={() => removeFromQueue(i)} hitSlop={8} style={styles.queueBtn}>
-                          <Ionicons name="close" size={18} color={theme.textMuted} />
-                        </TouchableOpacity>
-                      </>
-                    )}
-                  </View>
-                ))
+                upcoming.map((s, i) => {
+                  const isQueue = s._from === 'queue';
+                  const isCurrent = !isQueue && s._idx === currentIndex;
+                  const isPlayed = !isQueue && s._idx < currentIndex;
+                  const RowWrap = isQueue ? View : TouchableOpacity;
+                  const rowProps = isQueue
+                    ? {}
+                    : { onPress: () => playAtIndex(s._idx), activeOpacity: 0.6 };
+                  return (
+                    <RowWrap
+                      key={`${s.id}-${i}`}
+                      style={[styles.queueRow, isPlayed && styles.queueRowPlayed]}
+                      {...rowProps}
+                    >
+                      {isCurrent ? (
+                        <Ionicons name="volume-medium" size={15} color={theme.green} style={styles.queueNumSlot} />
+                      ) : (
+                        <Text style={[styles.queueNum, isQueue && styles.queueNumQ]}>
+                          {isQueue ? '•' : s._idx + 1}
+                        </Text>
+                      )}
+                      <View style={styles.queueInfo}>
+                        <Text
+                          style={[styles.queueTitle, isCurrent && styles.queueTitleCurrent]}
+                          numberOfLines={1}
+                        >
+                          {s.title}
+                        </Text>
+                        <Text style={styles.queueArtist} numberOfLines={1}>
+                          {s.artist || (isQueue ? 'In queue' : 'PlayFool')}
+                        </Text>
+                      </View>
+                      {isQueue && (
+                        <>
+                          <TouchableOpacity onPress={() => playFromQueue(i)} hitSlop={8} style={styles.queueBtn}>
+                            <Ionicons name="play" size={18} color={theme.green} />
+                          </TouchableOpacity>
+                          <TouchableOpacity onPress={() => removeFromQueue(i)} hitSlop={8} style={styles.queueBtn}>
+                            <Ionicons name="close" size={18} color={theme.textMuted} />
+                          </TouchableOpacity>
+                        </>
+                      )}
+                    </RowWrap>
+                  );
+                })
               )}
             </View>
           )}
@@ -470,9 +494,13 @@ const styles = StyleSheet.create({
   tabContent: { paddingHorizontal: 24, paddingTop: 8, minHeight: 120 },
   empty: { color: theme.textMuted, textAlign: 'center', paddingVertical: 24, fontSize: 13 },
   queueRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
+  queueRowPlayed: { opacity: 0.4 },
   queueNum: { color: theme.textMuted, width: 22, textAlign: 'center', fontSize: 12 },
+  queueNumQ: { color: theme.green, fontSize: 16 },
+  queueNumSlot: { width: 22, textAlign: 'center' },
   queueInfo: { flex: 1, minWidth: 0 },
   queueTitle: { color: theme.textPrimary, fontSize: 13, fontWeight: '500' },
+  queueTitleCurrent: { color: theme.green, fontWeight: '700' },
   queueArtist: { color: theme.textSecondary, fontSize: 11, marginTop: 1 },
   queueBtn: { padding: 6 },
   lyricsCenter: { alignItems: 'center', justifyContent: 'center', paddingVertical: 32 },

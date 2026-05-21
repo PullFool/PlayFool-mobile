@@ -194,6 +194,16 @@ export function PlayerProvider({ children }) {
     playSong(shuffled, 0);
   }, [playSong]);
 
+  // Jump straight to any song in the current playlist by index — used by
+  // the Up Next queue so the user can tap a played song to go back to it,
+  // or tap ahead, without losing the rest of the playlist.
+  const playAtIndex = useCallback(async (idx) => {
+    await abortCrossfade();
+    if (idx < 0 || idx >= songs.length || idx === currentIndex) return;
+    setCurrentIndex(idx);
+    try { await TrackPlayer.skip(idx); await TrackPlayer.play(); } catch (e) {}
+  }, [songs, currentIndex]);
+
   // Wire OS RemoteNext/RemotePrevious to our skip logic so the queue is
   // honored from the notification / lock-screen too.
   useTrackPlayerEvents([Event.RemoteNext, Event.RemotePrevious], (event) => {
@@ -204,7 +214,7 @@ export function PlayerProvider({ children }) {
   const value = {
     songs, currentSong, currentIndex, isPlaying, position, duration,
     shuffle, repeat, queue,
-    playSong, shufflePlay, togglePlayPause, skipNext, skipPrev, seekTo,
+    playSong, shufflePlay, playAtIndex, togglePlayPause, skipNext, skipPrev, seekTo,
     toggleShuffle: () => setShuffle((s) => !s),
     toggleRepeat: () => setRepeat((r) => (r + 1) % 3),
     addToQueue: (song) => setQueue((q) => [...q, song]),
