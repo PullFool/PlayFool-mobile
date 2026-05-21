@@ -297,19 +297,13 @@ export default function NowPlaying({ visible, onClose }) {
               <Ionicons name="shuffle" size={22} color={shuffle ? theme.green : theme.textSecondary} />
             </TouchableOpacity>
             <TouchableOpacity onPress={skipPrev} hitSlop={8}>
-              <Ionicons name="play-skip-back" size={28} color={theme.textPrimary} />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={() => seekTo(Math.max(0, position - 10))} hitSlop={8}>
-              <Ionicons name="play-back" size={24} color={theme.textPrimary} />
+              <Ionicons name="play-skip-back" size={30} color={theme.textPrimary} />
             </TouchableOpacity>
             <TouchableOpacity onPress={togglePlayPause} style={styles.playBtn}>
               <Ionicons name={isPlaying ? 'pause' : 'play'} size={32} color="#000" />
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => seekTo(position + 10)} hitSlop={8}>
-              <Ionicons name="play-forward" size={24} color={theme.textPrimary} />
-            </TouchableOpacity>
             <TouchableOpacity onPress={skipNext} hitSlop={8}>
-              <Ionicons name="play-skip-forward" size={28} color={theme.textPrimary} />
+              <Ionicons name="play-skip-forward" size={30} color={theme.textPrimary} />
             </TouchableOpacity>
             <TouchableOpacity onPress={toggleRepeat} hitSlop={8}>
               <Ionicons
