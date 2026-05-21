@@ -8,6 +8,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { theme } from '../utils/theme';
 import { usePlayer } from '../context/PlayerContext';
 import { reportError } from '../utils/errorReporter';
+import { fetchLrclibResults, lyricsKey } from '../utils/lyrics';
 
 const fmt = (s) => {
   if (!s || isNaN(s)) return '0:00';
@@ -17,21 +18,6 @@ const fmt = (s) => {
 };
 
 const REJECT_KEY = 'playfool_mobile_lyrics_rejected';
-
-function splitArtistTitle(title) {
-  if (!title) return null;
-  const cleaned = title
-    .replace(/\(.*?\)|\[.*?\]/g, '')
-    .replace(/\s+(official\s+(music\s+)?video|lyric(s)?\s+video|hd|hq)\s*$/i, '')
-    .trim();
-  const parts = cleaned.split(/\s+[-–—]\s+/);
-  if (parts.length >= 2) return { artist: parts[0].trim(), title: parts.slice(1).join(' - ').trim() };
-  return null;
-}
-
-function songKey(artist, title) {
-  return `${(artist || '').toLowerCase().trim()}|${(title || '').toLowerCase().trim()}`;
-}
 
 async function loadRejected(key) {
   try {
@@ -67,38 +53,17 @@ function parseSyncedLyrics(lrc) {
 }
 
 async function loadLyricsForSong(song) {
-  const split = splitArtistTitle(song.title);
-  if (!split) return { status: 'unparseable' };
-  const key = songKey(split.artist, split.title);
+  const key = lyricsKey(song.title);
+  if (!key) return { status: 'notfound' };
   const rejected = await loadRejected(key);
 
-  // Fetch lrclib results — `/api/get` is the precise endpoint that returns
-  // a single match by exact artist+track. We start with it for accuracy,
-  // then fall back to `/api/search` for fuzzy matches when get returns 404.
+  // Walk lrclib search variants the same way the desktop app does, so songs
+  // without a clean "Artist - Title" name still resolve.
   let results = [];
   try {
-    const r1 = await fetch(
-      `https://lrclib.net/api/get?artist_name=${encodeURIComponent(split.artist)}&track_name=${encodeURIComponent(split.title)}`,
-      { headers: { Accept: 'application/json' } },
-    );
-    if (r1.ok) {
-      const one = await r1.json();
-      if (one && one.id) results = [one];
-    }
-  } catch (e) {}
-  if (results.length === 0) {
-    try {
-      const q = `${split.title} ${split.artist}`.trim();
-      const r2 = await fetch(`https://lrclib.net/api/search?q=${encodeURIComponent(q)}`, {
-        headers: { Accept: 'application/json' },
-      });
-      if (r2.ok) {
-        const arr = await r2.json();
-        if (Array.isArray(arr)) results = arr;
-      }
-    } catch (e) {
-      return { status: 'error' };
-    }
+    results = await fetchLrclibResults(song.title);
+  } catch (e) {
+    return { status: 'error' };
   }
   if (results.length === 0) return { status: 'notfound' };
 
@@ -362,13 +327,6 @@ export default function NowPlaying({ visible, onClose }) {
                 <View style={styles.lyricsCenter}>
                   <ActivityIndicator size="small" color={theme.green} />
                   <Text style={styles.empty}>Searching lyrics...</Text>
-                </View>
-              )}
-              {lyrics.status === 'unparseable' && (
-                <View style={styles.lyricsCenter}>
-                  <Ionicons name="search-outline" size={40} color={theme.textMuted} />
-                  <Text style={styles.lyricsTitle}>Can't search lyrics</Text>
-                  <Text style={styles.lyricsHint}>The file name needs to be 'Artist - Title'.</Text>
                 </View>
               )}
               {lyrics.status === 'notfound' && (

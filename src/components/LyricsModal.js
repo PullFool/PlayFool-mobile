@@ -4,26 +4,9 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { theme } from '../utils/theme';
 import { reportError } from '../utils/errorReporter';
+import { fetchLrclibResults, lyricsKey } from '../utils/lyrics';
 
-const REJECT_KEY = 'playfool_mobile_lyrics_rejected'; // { "title|artist": ["id"...] }
-const LRCLIB_BASE = 'https://lrclib.net/api';
-
-function splitArtistTitle(title) {
-  if (!title) return null;
-  const cleaned = title
-    .replace(/\(.*?\)|\[.*?\]/g, '')
-    .replace(/\s+(official\s+(music\s+)?video|lyric(s)?\s+video|hd|hq)\s*$/i, '')
-    .trim();
-  const parts = cleaned.split(/\s+[-–—]\s+/);
-  if (parts.length >= 2) {
-    return { artist: parts[0].trim(), title: parts.slice(1).join(' - ').trim() };
-  }
-  return null;
-}
-
-function songKey(artist, title) {
-  return `${(artist || '').toLowerCase().trim()}|${(title || '').toLowerCase().trim()}`;
-}
+const REJECT_KEY = 'playfool_mobile_lyrics_rejected'; // { "<cleanTitle>": ["id"...] }
 
 async function loadRejected(key) {
   try {
@@ -42,16 +25,12 @@ async function saveRejected(key, ids) {
   } catch (e) {}
 }
 
-// Fetch all lrclib search results so we can step through matches the user
-// hasn't rejected. Returns the picked match + count metadata.
-async function fetchLyricsWithMatch(artist, title, rejectedIds) {
-  const q = `${title} ${artist}`.trim();
-  const res = await fetch(`${LRCLIB_BASE}/search?q=${encodeURIComponent(q)}`, {
-    headers: { Accept: 'application/json' },
-  });
-  if (!res.ok) throw new Error(`lrclib ${res.status}`);
-  const results = await res.json();
-  if (!Array.isArray(results) || results.length === 0) return null;
+// Fetch lrclib results (walking the desktop-style search variants) so we
+// can step through matches the user hasn't rejected. Returns the picked
+// match + count metadata.
+async function fetchLyricsWithMatch(title, rejectedIds) {
+  const results = await fetchLrclibResults(title);
+  if (!results.length) return null;
 
   const rejectedSet = new Set((rejectedIds || []).map(String));
   const eligible = results
@@ -76,17 +55,17 @@ export default function LyricsModal({ open, song, onClose }) {
   const [lyrics, setLyrics] = useState('');
   const [match, setMatch] = useState(null);
   const [loading, setLoading] = useState(false);
-  // status: '' | 'notfound' | 'unparseable' | 'error'
+  // status: '' | 'notfound' | 'noMore' | 'error'
   const [status, setStatus] = useState('');
-  const [keyParts, setKeyParts] = useState(null);
+  const [keyTitle, setKeyTitle] = useState('');
 
-  const load = useCallback(async (parts) => {
+  const load = useCallback(async (title) => {
     setLyrics(''); setStatus(''); setMatch(null);
     setLoading(true);
     try {
-      const key = songKey(parts.artist, parts.title);
+      const key = lyricsKey(title);
       const rejected = await loadRejected(key);
-      const result = await fetchLyricsWithMatch(parts.artist, parts.title, rejected);
+      const result = await fetchLyricsWithMatch(title, rejected);
       if (!result) {
         setStatus(rejected.length ? 'noMore' : 'notfound');
         return;
@@ -94,7 +73,7 @@ export default function LyricsModal({ open, song, onClose }) {
       setLyrics(result.text);
       setMatch({ sourceId: result.sourceId, total: result.totalMatches, current: result.currentIndex });
     } catch (e) {
-      reportError('lyrics', e, { song: parts.title });
+      reportError('lyrics', e, { song: title });
       setStatus('error');
     } finally {
       setLoading(false);
@@ -103,22 +82,20 @@ export default function LyricsModal({ open, song, onClose }) {
 
   useEffect(() => {
     if (!open || !song) return;
-    const parts = splitArtistTitle(song.title);
-    if (!parts) { setStatus('unparseable'); setKeyParts(null); return; }
-    setKeyParts(parts);
-    load(parts);
+    setKeyTitle(song.title || '');
+    load(song.title || '');
   }, [open, song, load]);
 
   const skipMatch = async () => {
-    if (!keyParts || !match?.sourceId) return;
-    const key = songKey(keyParts.artist, keyParts.title);
+    if (!keyTitle || !match?.sourceId) return;
+    const key = lyricsKey(keyTitle);
     const next = Array.from(new Set([...(await loadRejected(key)), match.sourceId]));
     await saveRejected(key, next);
-    load(keyParts);
+    load(keyTitle);
   };
 
   const markWrong = () => {
-    if (!keyParts || !match?.sourceId) return;
+    if (!keyTitle || !match?.sourceId) return;
     Alert.alert(
       'Mark lyrics as wrong?',
       `We won't show this match for "${song?.title || 'this song'}" again.`,
@@ -155,14 +132,6 @@ export default function LyricsModal({ open, song, onClose }) {
                 {status === 'noMore'
                   ? "You've rejected every match for this song. Reset rejections in Settings if you want to try again."
                   : "We couldn't find lyrics for this track. It might be too new, an instrumental, or just not in our database yet."}
-              </Text>
-            </View>
-          ) : status === 'unparseable' ? (
-            <View style={styles.center}>
-              <Ionicons name="search-outline" size={56} color={theme.textMuted} />
-              <Text style={styles.emptyTitle}>Can't search lyrics</Text>
-              <Text style={styles.emptyHint}>
-                The file name doesn't include an artist. Lyrics search works best with songs named like 'Artist - Title'.
               </Text>
             </View>
           ) : status === 'error' ? (
