@@ -7,19 +7,21 @@
 const LRCLIB_BASE = 'https://lrclib.net/api';
 
 // Strip upload/YouTube junk so the title is closer to "Artist Song".
-// Mirrors cleanTitle() in the desktop server.js.
+// Stronger than the desktop server.js cleanTitle — it also removes a
+// trailing run of bare junk words ("Lyrics Video", "Official Video HD",
+// the common typo "Lyrcs", etc.), which the parens-only desktop version
+// misses. That gap was why e.g. "rivermaya - 214 Lyrcs video" found no
+// lyrics: the junk polluted the lrclib query.
 export function cleanTitle(title) {
   return String(title || '')
-    .replace(/\(official\s*(music\s*)?video\)/gi, '')
-    .replace(/\(official\s*lyric\s*video\)/gi, '')
-    .replace(/\(live\s*(performance|at|session).*?\)/gi, '')
-    .replace(/\(lyrics?\)/gi, '')
-    .replace(/\(audio\)/gi, '')
-    .replace(/\[.*?\]/g, '')
-    .replace(/\|.*$/, '')
-    .replace(/ft\.?|feat\.?/gi, '')
-    .replace(/MV|M\/V|Music Video/gi, '')
+    .replace(/\([^)]*\)/g, '')        // anything in (parens): (Official Video), (HD), (Audio)
+    .replace(/\[[^\]]*\]/g, '')       // anything in [brackets]
+    .replace(/\|.*$/, '')             // everything after a pipe
+    .replace(/\bft\.?\b|\bfeat\.?\b/gi, '')
     .replace(/Tower Sessions?/gi, '')
+    // Trailing run of upload-junk words. Trailing-only, so a song actually
+    // named "Video Games" keeps its leading word.
+    .replace(/([\s\-–—|]+(official|lyrics?|lyric|lyrcs|video|audio|hd|hq|4k|mv|m\/v|visualizer|music)\b)+\s*$/gi, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
 }
