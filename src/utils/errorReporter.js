@@ -125,35 +125,3 @@ export function reportError(source, error, extra = {}) {
   send(source, error?.message || String(error), error?.stack, extra);
 }
 
-// Diagnostic helper. Returns { configured, ok, status, error }. UI can use
-// this to show whether the webhook is set up and whether the actual fetch
-// succeeds — surfacing what `send()` normally swallows.
-export async function testWebhook() {
-  if (!DISCORD_WEBHOOK) {
-    return { configured: false, ok: false, error: 'EXPO_PUBLIC_DISCORD_WEBHOOK is empty in this build' };
-  }
-  const payload = {
-    username: 'PlayFool Mobile Reporter',
-    content: `Webhook test from PlayFool ${APP_VERSION} on ${Platform.OS} ${Platform.Version} at ${new Date().toISOString()}`,
-  };
-  try {
-    const res = await fetch(DISCORD_WEBHOOK, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
-    const text = res.ok ? '' : await res.text().catch(() => '');
-    return {
-      configured: true,
-      ok: res.ok,
-      status: res.status,
-      error: res.ok ? '' : `HTTP ${res.status}${text ? `: ${text.slice(0, 200)}` : ''}`,
-    };
-  } catch (e) {
-    return {
-      configured: true,
-      ok: false,
-      error: `network: ${e?.message || String(e)}`,
-    };
-  }
-}

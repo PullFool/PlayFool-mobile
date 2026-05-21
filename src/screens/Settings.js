@@ -3,26 +3,22 @@ import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Linking } from 'r
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Application from 'expo-application';
-import { theme, useTheme } from '../utils/theme';
+import { theme } from '../utils/theme';
 import SupportModal from '../components/SupportModal';
 import EqScreen from './EqScreen';
 import SyncScreen from './SyncScreen';
 import { recordHeart, HEARTED_KEY as HEART_KEY } from '../utils/hearts';
 import { EQ_AVAILABLE } from '../utils/eq';
 import { setCrossfadeSeconds } from '../utils/crossfade';
-import { testWebhook } from '../utils/errorReporter';
 
 const KOFI_URL = 'https://ko-fi.com/PullFool';
 
 export default function Settings() {
-  const { mode, toggle } = useTheme();
   const [showSupport, setShowSupport] = useState(false);
   const [showEq, setShowEq] = useState(false);
   const [showSync, setShowSync] = useState(false);
   const [hasHearted, setHasHearted] = useState(false);
   const [crossfade, setCrossfade] = useState(0);
-  const [webhookStatus, setWebhookStatus] = useState('');
-  const [webhookTesting, setWebhookTesting] = useState(false);
 
   useEffect(() => {
     AsyncStorage.getItem(HEART_KEY).then((v) => setHasHearted(v === '1'));
@@ -38,20 +34,6 @@ export default function Settings() {
   };
 
   const onHeartTap = () => setShowSupport(true);
-
-  const runWebhookTest = async () => {
-    setWebhookTesting(true);
-    setWebhookStatus('Testing…');
-    const r = await testWebhook();
-    if (!r.configured) {
-      setWebhookStatus('Not configured — EXPO_PUBLIC_DISCORD_WEBHOOK secret missing in build');
-    } else if (r.ok) {
-      setWebhookStatus(`OK — Discord accepted the webhook (HTTP ${r.status}). Check the channel.`);
-    } else {
-      setWebhookStatus(`Failed — ${r.error}`);
-    }
-    setWebhookTesting(false);
-  };
 
   const handleLike = async () => {
     const version = Application.nativeApplicationVersion || 'dev';
@@ -125,16 +107,6 @@ export default function Settings() {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.label}>Appearance</Text>
-        <Text style={styles.help}>Switch between dark and light theme.</Text>
-        <TouchableOpacity style={styles.themeBtn} onPress={toggle}>
-          <Ionicons name={mode === 'dark' ? 'moon' : 'sunny'} size={16} color={theme.textPrimary} />
-          <Text style={styles.themeBtnText}>{mode === 'dark' ? 'Dark' : 'Light'} mode</Text>
-          <Ionicons name="swap-horizontal" size={14} color={theme.textMuted} />
-        </TouchableOpacity>
-      </View>
-
-      <View style={styles.section}>
         <Text style={styles.label}>Support PlayFool</Text>
         <Text style={styles.help}>
           PlayFool is built with love and is completely free. If you enjoy it, your support keeps it going.
@@ -155,25 +127,6 @@ export default function Settings() {
             <Text style={styles.kofiBtnText}>☕ Ko-fi</Text>
           </TouchableOpacity>
         </View>
-      </View>
-
-      <View style={styles.section}>
-        <Text style={styles.label}>Diagnostics</Text>
-        <Text style={styles.help}>
-          Send a test message to the Discord error webhook so you can see whether
-          error reports are actually getting through.
-        </Text>
-        <TouchableOpacity
-          style={styles.themeBtn}
-          onPress={runWebhookTest}
-          disabled={webhookTesting}
-        >
-          <Ionicons name="paper-plane" size={16} color={theme.textPrimary} />
-          <Text style={styles.themeBtnText}>{webhookTesting ? 'Sending…' : 'Test Discord webhook'}</Text>
-        </TouchableOpacity>
-        {webhookStatus ? (
-          <Text style={styles.webhookStatus} selectable>{webhookStatus}</Text>
-        ) : null}
       </View>
 
       <Text style={styles.footer}>
@@ -216,5 +169,4 @@ const styles = StyleSheet.create({
   cfPillActive: { backgroundColor: theme.green, borderColor: theme.green },
   cfPillText: { color: theme.textSecondary, fontSize: 12, fontWeight: '600' },
   cfPillTextActive: { color: '#000' },
-  webhookStatus: { color: theme.textSecondary, fontSize: 12, marginTop: 10, lineHeight: 16 },
 });
