@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, Image, TouchableOpacity, Modal, StyleSheet,
-  ScrollView, ActivityIndicator, FlatList, Alert,
+  ScrollView, ActivityIndicator, FlatList, Alert, PanResponder,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -153,6 +153,10 @@ export default function NowPlaying({ visible, onClose }) {
   const [tab, setTab] = useState('upnext');
   const [lyrics, setLyrics] = useState({ status: 'idle', text: '' });
   const lastSongIdRef = useRef(null);
+  // Seek-bar drag state.
+  const [seeking, setSeeking] = useState(false);
+  const [seekValue, setSeekValue] = useState(0);
+  const [trackWidth, setTrackWidth] = useState(0);
 
   // Reset to upnext tab whenever the modal opens
   useEffect(() => { if (visible) setTab('upnext'); }, [visible]);
@@ -204,7 +208,41 @@ export default function NowPlaying({ visible, onClose }) {
     return list;
   })();
 
-  const progress = duration ? Math.min(1, position / duration) : 0;
+  const livePosition = duration ? Math.min(1, position / duration) : 0;
+  // While the user is dragging the seek bar we show seekValue instead of the
+  // live playback position, so the thumb tracks the finger smoothly.
+  const progress = seeking ? seekValue : livePosition;
+
+  // Refs so the PanResponder (created once) always reads fresh layout/duration.
+  const seekRef = useRef({ width: 0, duration: 0 });
+  seekRef.current.width = trackWidth;
+  seekRef.current.duration = duration;
+
+  const seekPan = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: () => true,
+      onPanResponderGrant: (e) => {
+        const w = seekRef.current.width || 1;
+        const f = Math.min(1, Math.max(0, e.nativeEvent.locationX / w));
+        setSeeking(true);
+        setSeekValue(f);
+      },
+      onPanResponderMove: (e) => {
+        const w = seekRef.current.width || 1;
+        const f = Math.min(1, Math.max(0, e.nativeEvent.locationX / w));
+        setSeekValue(f);
+      },
+      onPanResponderRelease: (e) => {
+        const w = seekRef.current.width || 1;
+        const f = Math.min(1, Math.max(0, e.nativeEvent.locationX / w));
+        const secs = f * (seekRef.current.duration || 0);
+        seekTo(secs);
+        setSeeking(false);
+      },
+      onPanResponderTerminate: () => setSeeking(false),
+    })
+  ).current;
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={onClose} statusBarTranslucent>
@@ -237,11 +275,18 @@ export default function NowPlaying({ visible, onClose }) {
             </Text>
           </View>
 
-          {/* Progress */}
+          {/* Progress — draggable seek bar */}
           <View style={styles.progressRow}>
-            <Text style={styles.time}>{fmt(position)}</Text>
-            <View style={styles.progressTrack}>
-              <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+            <Text style={styles.time}>{fmt(seeking ? seekValue * duration : position)}</Text>
+            <View
+              style={styles.progressTouch}
+              onLayout={(e) => setTrackWidth(e.nativeEvent.layout.width)}
+              {...seekPan.panHandlers}
+            >
+              <View style={styles.progressTrack}>
+                <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+              </View>
+              <View style={[styles.progressThumb, { left: `${progress * 100}%` }, seeking && styles.progressThumbActive]} />
             </View>
             <Text style={styles.time}>{fmt(duration)}</Text>
           </View>
@@ -463,11 +508,23 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 10,
     paddingHorizontal: 24, marginBottom: 14,
   },
+  // Tall transparent hit-area so the 4px bar is easy to grab and drag.
+  progressTouch: {
+    flex: 1, height: 24, justifyContent: 'center',
+  },
   progressTrack: {
-    flex: 1, height: 4, backgroundColor: theme.bgSurface, borderRadius: 2,
+    height: 4, backgroundColor: theme.bgSurface, borderRadius: 2,
     overflow: 'hidden',
   },
   progressFill: { height: '100%', backgroundColor: theme.green, borderRadius: 2 },
+  progressThumb: {
+    position: 'absolute',
+    width: 14, height: 14, borderRadius: 7,
+    backgroundColor: theme.green,
+    marginLeft: -7,
+    top: 5,
+  },
+  progressThumbActive: { transform: [{ scale: 1.35 }] },
   time: { color: theme.textMuted, fontSize: 11, fontVariant: ['tabular-nums'], width: 40, textAlign: 'center' },
   controls: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
