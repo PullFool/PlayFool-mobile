@@ -85,7 +85,7 @@ export default function Settings() {
       {EQ_AVAILABLE ? (
         <View style={styles.section}>
           <Text style={styles.label}>Equalizer</Text>
-          <Text style={styles.help}>10-band system EQ with presets. Affects all music output.</Text>
+          <Text style={styles.help}>System graphic equalizer with presets. Affects all music output. Band count depends on your device (Android's built-in EQ is typically 5 bands).</Text>
           <TouchableOpacity style={styles.themeBtn} onPress={() => setShowEq(true)}>
             <Ionicons name="options" size={16} color={theme.textPrimary} />
             <Text style={styles.themeBtnText}>Open Equalizer</Text>
