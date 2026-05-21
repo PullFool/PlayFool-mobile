@@ -159,9 +159,19 @@ export default function NowPlaying({ visible, onClose }) {
   // Seek-bar drag state.
   const [seeking, setSeeking] = useState(false);
   const [seekValue, setSeekValue] = useState(0);
+  // collapsed = the big artwork is folded into a compact mini player at the
+  // top, freeing space for the queue list / lyrics.
+  const [collapsed, setCollapsed] = useState(false);
 
-  // Reset to upnext tab whenever the modal opens
-  useEffect(() => { if (visible) setTab('upnext'); }, [visible]);
+  // Reset to upnext tab + expanded artwork whenever the modal opens
+  useEffect(() => {
+    if (visible) { setTab('upnext'); setCollapsed(false); }
+  }, [visible]);
+
+  // Scrolling the content list folds the artwork into the mini player.
+  const handleContentScroll = (e) => {
+    if (!collapsed && e.nativeEvent.contentOffset.y > 40) setCollapsed(true);
+  };
 
   const reloadLyrics = useCallback(() => {
     if (!currentSong) return;
@@ -268,82 +278,140 @@ export default function NowPlaying({ visible, onClose }) {
           <View style={{ width: 26 }} />
         </View>
 
-        <ScrollView contentContainerStyle={styles.scroll} showsVerticalScrollIndicator={false}>
-          <View style={styles.coverWrap}>
-            {currentSong?.cover ? (
-              <Image source={{ uri: currentSong.cover }} style={styles.cover} />
-            ) : (
-              <View style={[styles.cover, styles.coverFallback]}>
-                <Ionicons name="musical-notes" size={80} color={theme.green} />
-              </View>
-            )}
-          </View>
-
-          <View style={styles.meta}>
-            <Text style={styles.songTitle} numberOfLines={2}>
-              {currentSong?.title || 'No song playing'}
-            </Text>
-            <Text style={styles.artist} numberOfLines={1}>
-              {currentSong?.artist || 'PlayFool'}
-            </Text>
-          </View>
-
-          {/* Progress — draggable seek bar */}
-          <View style={styles.progressRow}>
-            <Text style={styles.time}>{fmt(seeking ? seekValue * duration : position)}</Text>
+        {/* Header — full artwork (expanded) or compact mini player (collapsed) */}
+        {collapsed ? (
+          <View style={styles.miniHeader}>
+            <View style={styles.miniRow}>
+              <TouchableOpacity
+                style={styles.miniTap}
+                onPress={() => setCollapsed(false)}
+                activeOpacity={0.7}
+              >
+                {currentSong?.cover ? (
+                  <Image source={{ uri: currentSong.cover }} style={styles.miniThumb} />
+                ) : (
+                  <View style={[styles.miniThumb, styles.coverFallback]}>
+                    <Ionicons name="musical-notes" size={18} color={theme.green} />
+                  </View>
+                )}
+                <View style={styles.miniText}>
+                  <Text style={styles.miniTitle} numberOfLines={1}>
+                    {currentSong?.title || 'No song playing'}
+                  </Text>
+                  <Text style={styles.miniArtist} numberOfLines={1}>
+                    {currentSong?.artist || 'PlayFool'}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={skipPrev} hitSlop={8} style={styles.miniBtn}>
+                <Ionicons name="play-skip-back" size={22} color={theme.textPrimary} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={togglePlayPause} hitSlop={8} style={styles.miniBtn}>
+                <Ionicons name={isPlaying ? 'pause' : 'play'} size={26} color={theme.textPrimary} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={skipNext} hitSlop={8} style={styles.miniBtn}>
+                <Ionicons name="play-skip-forward" size={22} color={theme.textPrimary} />
+              </TouchableOpacity>
+            </View>
             <View
               ref={trackRef}
-              style={styles.progressTouch}
+              style={styles.miniProgressTouch}
               onLayout={measureTrack}
               {...seekPan.panHandlers}
             >
-              <View style={styles.progressTrack}>
+              <View style={styles.miniProgressTrack}>
                 <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
               </View>
-              <View style={[styles.progressThumb, { left: `${progress * 100}%` }, seeking && styles.progressThumbActive]} />
+              <View style={[styles.miniProgressThumb, { left: `${progress * 100}%` }]} />
             </View>
-            <Text style={styles.time}>{fmt(duration)}</Text>
           </View>
+        ) : (
+          <View>
+            <View style={styles.coverWrap}>
+              {currentSong?.cover ? (
+                <Image source={{ uri: currentSong.cover }} style={styles.cover} />
+              ) : (
+                <View style={[styles.cover, styles.coverFallback]}>
+                  <Ionicons name="musical-notes" size={80} color={theme.green} />
+                </View>
+              )}
+            </View>
 
-          {/* Controls */}
-          <View style={styles.controls}>
-            <TouchableOpacity onPress={toggleShuffle} hitSlop={8}>
-              <Ionicons name="shuffle" size={22} color={shuffle ? theme.green : theme.textSecondary} />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={skipPrev} hitSlop={8}>
-              <Ionicons name="play-skip-back" size={30} color={theme.textPrimary} />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={togglePlayPause} style={styles.playBtn}>
-              <Ionicons name={isPlaying ? 'pause' : 'play'} size={32} color="#000" />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={skipNext} hitSlop={8}>
-              <Ionicons name="play-skip-forward" size={30} color={theme.textPrimary} />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={toggleRepeat} hitSlop={8}>
-              <Ionicons
-                name={repeat === 2 ? 'repeat' : 'repeat'}
-                size={22}
-                color={repeat > 0 ? theme.green : theme.textSecondary}
-              />
-              {repeat === 2 && <View style={styles.repeatOneDot} />}
-            </TouchableOpacity>
-          </View>
+            <View style={styles.meta}>
+              <Text style={styles.songTitle} numberOfLines={2}>
+                {currentSong?.title || 'No song playing'}
+              </Text>
+              <Text style={styles.artist} numberOfLines={1}>
+                {currentSong?.artist || 'PlayFool'}
+              </Text>
+            </View>
 
-          {/* Tabs */}
-          <View style={styles.tabRow}>
-            {['upnext', 'lyrics'].map((t) => (
-              <TouchableOpacity
-                key={t}
-                onPress={() => setTab(t)}
-                style={[styles.tabBtn, tab === t && styles.tabBtnActive]}
+            {/* Progress — draggable seek bar */}
+            <View style={styles.progressRow}>
+              <Text style={styles.time}>{fmt(seeking ? seekValue * duration : position)}</Text>
+              <View
+                ref={trackRef}
+                style={styles.progressTouch}
+                onLayout={measureTrack}
+                {...seekPan.panHandlers}
               >
-                <Text style={[styles.tabText, tab === t && styles.tabTextActive]}>
-                  {t === 'upnext' ? 'Up Next' : 'Lyrics'}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+                <View style={styles.progressTrack}>
+                  <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+                </View>
+                <View style={[styles.progressThumb, { left: `${progress * 100}%` }, seeking && styles.progressThumbActive]} />
+              </View>
+              <Text style={styles.time}>{fmt(duration)}</Text>
+            </View>
 
+            {/* Controls */}
+            <View style={styles.controls}>
+              <TouchableOpacity onPress={toggleShuffle} hitSlop={8}>
+                <Ionicons name="shuffle" size={22} color={shuffle ? theme.green : theme.textSecondary} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={skipPrev} hitSlop={8}>
+                <Ionicons name="play-skip-back" size={30} color={theme.textPrimary} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={togglePlayPause} style={styles.playBtn}>
+                <Ionicons name={isPlaying ? 'pause' : 'play'} size={32} color="#000" />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={skipNext} hitSlop={8}>
+                <Ionicons name="play-skip-forward" size={30} color={theme.textPrimary} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={toggleRepeat} hitSlop={8}>
+                <Ionicons
+                  name={repeat === 2 ? 'repeat' : 'repeat'}
+                  size={22}
+                  color={repeat > 0 ? theme.green : theme.textSecondary}
+                />
+                {repeat === 2 && <View style={styles.repeatOneDot} />}
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {/* Tabs — fixed */}
+        <View style={styles.tabRow}>
+          {['upnext', 'lyrics'].map((t) => (
+            <TouchableOpacity
+              key={t}
+              onPress={() => { setTab(t); if (t === 'lyrics') setCollapsed(true); }}
+              style={[styles.tabBtn, tab === t && styles.tabBtnActive]}
+            >
+              <Text style={[styles.tabText, tab === t && styles.tabTextActive]}>
+                {t === 'upnext' ? 'Up Next' : 'Lyrics'}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+
+        {/* Scrollable content — list / lyrics. Scrolling folds the header. */}
+        <ScrollView
+          style={styles.contentScroll}
+          contentContainerStyle={styles.scroll}
+          showsVerticalScrollIndicator={false}
+          onScroll={handleContentScroll}
+          scrollEventThrottle={16}
+        >
           {tab === 'upnext' && (
             <View style={styles.tabContent}>
               {upcoming.length === 0 ? (
@@ -474,6 +542,25 @@ const styles = StyleSheet.create({
   },
   topLabel: { color: theme.textSecondary, fontSize: 12, letterSpacing: 1.5, textTransform: 'uppercase' },
   scroll: { paddingBottom: 40 },
+  contentScroll: { flex: 1 },
+  // Collapsed mini player.
+  miniHeader: {
+    paddingHorizontal: 16, paddingTop: 4, paddingBottom: 6,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: theme.border,
+  },
+  miniRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  miniTap: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10, minWidth: 0 },
+  miniThumb: { width: 46, height: 46, borderRadius: 6, backgroundColor: theme.bgSurface },
+  miniText: { flex: 1, minWidth: 0 },
+  miniTitle: { color: theme.textPrimary, fontSize: 14, fontWeight: '700' },
+  miniArtist: { color: theme.textSecondary, fontSize: 12, marginTop: 1 },
+  miniBtn: { padding: 6 },
+  miniProgressTouch: { height: 16, justifyContent: 'center', marginTop: 2 },
+  miniProgressTrack: { height: 3, backgroundColor: theme.bgSurface, borderRadius: 2, overflow: 'hidden' },
+  miniProgressThumb: {
+    position: 'absolute', width: 10, height: 10, borderRadius: 5,
+    backgroundColor: theme.green, marginLeft: -5, top: 3,
+  },
   coverWrap: {
     alignItems: 'center', justifyContent: 'center',
     paddingHorizontal: 24, marginTop: 8, marginBottom: 24,
