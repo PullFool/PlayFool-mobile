@@ -158,18 +158,18 @@ export function PlayerProvider({ children }) {
       return;
     }
     if (songs.length === 0) return;
-    let next;
-    if (shuffle) next = Math.floor(Math.random() * songs.length);
-    else {
-      next = (currentIndex + 1) % songs.length;
-      if (next === 0 && repeat === 0) {
-        try { await TrackPlayer.pause(); } catch (e) {}
-        return;
-      }
+    // The songs array is already in play order — shufflePlay pre-shuffles it
+    // once — so Next always advances sequentially. Re-randomizing on every
+    // skip (the old behavior) made Next feel like it re-shuffled and could
+    // replay or skip songs.
+    const next = (currentIndex + 1) % songs.length;
+    if (next === 0 && repeat === 0) {
+      try { await TrackPlayer.pause(); } catch (e) {}
+      return;
     }
     setCurrentIndex(next);
     try { await TrackPlayer.skip(next); await TrackPlayer.play(); } catch (e) {}
-  }, [queue, songs, currentIndex, shuffle, repeat, playSong]);
+  }, [queue, songs, currentIndex, repeat, playSong]);
 
   const skipPrev = useCallback(async () => {
     await abortCrossfade();

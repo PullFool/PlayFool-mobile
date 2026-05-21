@@ -231,7 +231,8 @@ export default function NowPlaying({ visible, onClose }) {
     const list = [];
     for (const q of queue) list.push({ ...q, _from: 'queue' });
     if (currentIndex >= 0) {
-      for (let i = currentIndex + 1; i < songs.length && list.length < 30; i++) {
+      // Show the whole rest of the playlist, not just the next 30.
+      for (let i = currentIndex + 1; i < songs.length; i++) {
         list.push({ ...songs[i], _from: 'songs', _idx: i });
       }
     }
