@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, Image, TouchableOpacity, Modal, StyleSheet,
   ScrollView, ActivityIndicator, FlatList, Alert, PanResponder,
+  LayoutAnimation, UIManager, Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -9,6 +10,12 @@ import { theme } from '../utils/theme';
 import { usePlayer } from '../context/PlayerContext';
 import { reportError } from '../utils/errorReporter';
 import { fetchLrclibResults, lyricsKey } from '../utils/lyrics';
+
+// LayoutAnimation on Android needs this opt-in to animate the
+// expand/collapse of the Now Playing header.
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
 
 const fmt = (s) => {
   if (!s || isNaN(s)) return '0:00';
@@ -116,8 +123,8 @@ function KaraokeLyrics({ lines, position, onSeek }) {
   return (
     <ScrollView
       ref={scrollRef}
-      style={{ maxHeight: 420 }}
-      contentContainerStyle={{ paddingVertical: 60 }}
+      style={{ flex: 1 }}
+      contentContainerStyle={{ paddingVertical: 60, paddingHorizontal: 24 }}
       showsVerticalScrollIndicator={false}
     >
       {lines.map((line, i) => (
@@ -168,9 +175,15 @@ export default function NowPlaying({ visible, onClose }) {
     if (visible) { setTab('upnext'); setCollapsed(false); }
   }, [visible]);
 
+  // Expand/collapse the header with a smooth layout animation.
+  const setCollapsedAnimated = (val) => {
+    LayoutAnimation.configureNext(LayoutAnimation.create(220, 'easeInEaseOut', 'opacity'));
+    setCollapsed(val);
+  };
+
   // Scrolling the content list folds the artwork into the mini player.
   const handleContentScroll = (e) => {
-    if (!collapsed && e.nativeEvent.contentOffset.y > 40) setCollapsed(true);
+    if (!collapsed && e.nativeEvent.contentOffset.y > 12) setCollapsedAnimated(true);
   };
 
   const reloadLyrics = useCallback(() => {
@@ -260,8 +273,11 @@ export default function NowPlaying({ visible, onClose }) {
       },
       onPanResponderRelease: (e, g) => {
         const f = seekFraction(g.moveX);
+        setSeekValue(f);
         seekTo(f * (seekRef.current.duration || 0));
-        setSeeking(false);
+        // Hold the bar at the dropped spot briefly — otherwise it snaps back
+        // to the stale polled position before TrackPlayer reports the seek.
+        setTimeout(() => setSeeking(false), 600);
       },
       onPanResponderTerminate: () => setSeeking(false),
     })
@@ -284,7 +300,7 @@ export default function NowPlaying({ visible, onClose }) {
             <View style={styles.miniRow}>
               <TouchableOpacity
                 style={styles.miniTap}
-                onPress={() => setCollapsed(false)}
+                onPress={() => setCollapsedAnimated(false)}
                 activeOpacity={0.7}
               >
                 {currentSong?.cover ? (
@@ -394,7 +410,7 @@ export default function NowPlaying({ visible, onClose }) {
           {['upnext', 'lyrics'].map((t) => (
             <TouchableOpacity
               key={t}
-              onPress={() => { setTab(t); if (t === 'lyrics') setCollapsed(true); }}
+              onPress={() => { setTab(t); if (t === 'lyrics') setCollapsedAnimated(true); }}
               style={[styles.tabBtn, tab === t && styles.tabBtnActive]}
             >
               <Text style={[styles.tabText, tab === t && styles.tabTextActive]}>
@@ -404,15 +420,16 @@ export default function NowPlaying({ visible, onClose }) {
           ))}
         </View>
 
-        {/* Scrollable content — list / lyrics. Scrolling folds the header. */}
-        <ScrollView
-          style={styles.contentScroll}
-          contentContainerStyle={styles.scroll}
-          showsVerticalScrollIndicator={false}
-          onScroll={handleContentScroll}
-          scrollEventThrottle={16}
-        >
-          {tab === 'upnext' && (
+        {/* Content — the Up Next list scrolls (and folds the header);
+            the Lyrics tab is a flex area so lyrics fill to the bottom. */}
+        {tab === 'upnext' ? (
+          <ScrollView
+            style={styles.contentScroll}
+            contentContainerStyle={styles.scroll}
+            showsVerticalScrollIndicator={false}
+            onScroll={handleContentScroll}
+            scrollEventThrottle={16}
+          >
             <View style={styles.tabContent}>
               {upcoming.length === 0 ? (
                 <Text style={styles.empty}>Nothing up next.</Text>
@@ -464,10 +481,9 @@ export default function NowPlaying({ visible, onClose }) {
                 })
               )}
             </View>
-          )}
-
-          {tab === 'lyrics' && (
-            <View style={styles.tabContent}>
+          </ScrollView>
+        ) : (
+          <View style={styles.lyricsArea}>
               {lyrics.status === 'loading' && (
                 <View style={styles.lyricsCenter}>
                   <ActivityIndicator size="small" color={theme.green} />
@@ -500,7 +516,13 @@ export default function NowPlaying({ visible, onClose }) {
                   {lyrics.lines && lyrics.lines.length > 0 ? (
                     <KaraokeLyrics lines={lyrics.lines} position={position} onSeek={seekTo} />
                   ) : (
-                    <Text style={styles.lyricsBody}>{lyrics.text}</Text>
+                    <ScrollView
+                      style={{ flex: 1 }}
+                      contentContainerStyle={styles.lyricsBodyWrap}
+                      showsVerticalScrollIndicator={false}
+                    >
+                      <Text style={styles.lyricsBody}>{lyrics.text}</Text>
+                    </ScrollView>
                   )}
                   {lyrics.total > 0 && (
                     <View style={styles.matchBar}>
@@ -525,9 +547,8 @@ export default function NowPlaying({ visible, onClose }) {
                   )}
                 </>
               )}
-            </View>
-          )}
-        </ScrollView>
+          </View>
+        )}
       </View>
     </Modal>
   );
@@ -620,6 +641,9 @@ const styles = StyleSheet.create({
   tabText: { color: theme.textSecondary, fontSize: 12, fontWeight: '700', letterSpacing: 1.2, textTransform: 'uppercase' },
   tabTextActive: { color: theme.green },
   tabContent: { paddingHorizontal: 24, paddingTop: 8, minHeight: 120 },
+  // Lyrics tab fills all remaining height so lyrics reach the bottom.
+  lyricsArea: { flex: 1 },
+  lyricsBodyWrap: { paddingHorizontal: 24, paddingVertical: 16, paddingBottom: 40 },
   empty: { color: theme.textMuted, textAlign: 'center', paddingVertical: 24, fontSize: 13 },
   queueRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 8 },
   queueRowPlayed: { opacity: 0.4 },
@@ -631,7 +655,7 @@ const styles = StyleSheet.create({
   queueTitleCurrent: { color: theme.green, fontWeight: '700' },
   queueArtist: { color: theme.textSecondary, fontSize: 11, marginTop: 1 },
   queueBtn: { padding: 6 },
-  lyricsCenter: { alignItems: 'center', justifyContent: 'center', paddingVertical: 32 },
+  lyricsCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 32 },
   lyricsTitle: { color: theme.textPrimary, fontSize: 14, fontWeight: '700', marginTop: 10 },
   lyricsHint: { color: theme.textMuted, fontSize: 12, marginTop: 6, textAlign: 'center', paddingHorizontal: 24 },
   lyricsBody: { color: theme.textPrimary, fontSize: 14, lineHeight: 22 },

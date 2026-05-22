@@ -101,7 +101,7 @@ export function PlayerProvider({ children }) {
   }, [repeat]);
 
   // Real-time playback state + position from TrackPlayer
-  const { position, duration } = useProgress(500);
+  const { position, duration } = useProgress(250);
 
   useTrackPlayerEvents(PLAY_EVENTS, async (event) => {
     if (event.type === Event.PlaybackError) {
