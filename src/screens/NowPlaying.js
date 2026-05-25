@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo, memo } from 'react';
 import {
   View, Text, Image, TouchableOpacity, Modal, StyleSheet,
   ScrollView, ActivityIndicator, FlatList, Alert, PanResponder,
@@ -101,8 +101,10 @@ async function loadLyricsForSong(song) {
 
 // Karaoke-style synced lyric renderer. Highlights the current line based
 // on playback position and auto-scrolls so the active line stays centered.
-// Tapping a line seeks to its timestamp.
-function KaraokeLyrics({ lines, position, onSeek }) {
+// Tapping a line seeks to its timestamp. Wrapped in React.memo so the
+// seek-bar drag (which re-renders the parent ~60x/s) doesn't re-render
+// the lyrics list — position only changes at the useProgress poll rate.
+const KaraokeLyrics = memo(function KaraokeLyrics({ lines, position, onSeek }) {
   const scrollRef = useRef(null);
   const [lineHeights, setLineHeights] = useState({});
 
@@ -149,7 +151,7 @@ function KaraokeLyrics({ lines, position, onSeek }) {
       ))}
     </ScrollView>
   );
-}
+});
 
 export default function NowPlaying({ visible, onClose }) {
   const {
@@ -177,7 +179,7 @@ export default function NowPlaying({ visible, onClose }) {
 
   // Expand/collapse the header with a smooth layout animation.
   const setCollapsedAnimated = (val) => {
-    LayoutAnimation.configureNext(LayoutAnimation.create(220, 'easeInEaseOut', 'opacity'));
+    LayoutAnimation.configureNext(LayoutAnimation.create(150, 'easeInEaseOut', 'opacity'));
     setCollapsed(val);
   };
 
@@ -224,14 +226,71 @@ export default function NowPlaying({ visible, onClose }) {
   // The queue shows the WHOLE playlist — already-played, current, and
   // upcoming — so the user can tap back to a finished song. Each playlist
   // row keeps its real index, so numbering never shifts as songs play.
-  const upcoming = (() => {
+  // Memoised so the high-frequency re-renders from a seek-bar drag don't
+  // rebuild the entire array.
+  const upcoming = useMemo(() => {
     const list = [];
     for (const q of queue) list.push({ ...q, _from: 'queue' });
     for (let i = 0; i < songs.length; i++) {
       list.push({ ...songs[i], _from: 'songs', _idx: i });
     }
     return list;
-  })();
+  }, [queue, songs]);
+
+  // The list JSX is memoised separately — it only depends on the list
+  // contents and the currently-playing index (for highlight/dim styling).
+  // Seek-bar drags re-render NowPlaying ~60x/s but the deps here don't
+  // change, so the heavy .map() is reused and the drag stays smooth.
+  const upcomingList = useMemo(() => {
+    if (upcoming.length === 0) {
+      return <Text style={styles.empty}>Nothing up next.</Text>;
+    }
+    return upcoming.map((s, i) => {
+      const isQueue = s._from === 'queue';
+      const isCurrent = !isQueue && s._idx === currentIndex;
+      const isPlayed = !isQueue && s._idx < currentIndex;
+      const RowWrap = isQueue ? View : TouchableOpacity;
+      const rowProps = isQueue
+        ? {}
+        : { onPress: () => playAtIndex(s._idx), activeOpacity: 0.6 };
+      return (
+        <RowWrap
+          key={`${s.id}-${i}`}
+          style={[styles.queueRow, isPlayed && styles.queueRowPlayed]}
+          {...rowProps}
+        >
+          {isCurrent ? (
+            <Ionicons name="volume-medium" size={15} color={theme.green} style={styles.queueNumSlot} />
+          ) : (
+            <Text style={[styles.queueNum, isQueue && styles.queueNumQ]}>
+              {isQueue ? '•' : s._idx + 1}
+            </Text>
+          )}
+          <View style={styles.queueInfo}>
+            <Text
+              style={[styles.queueTitle, isCurrent && styles.queueTitleCurrent]}
+              numberOfLines={1}
+            >
+              {s.title}
+            </Text>
+            <Text style={styles.queueArtist} numberOfLines={1}>
+              {s.artist || (isQueue ? 'In queue' : 'PlayFool')}
+            </Text>
+          </View>
+          {isQueue && (
+            <>
+              <TouchableOpacity onPress={() => playFromQueue(i)} hitSlop={8} style={styles.queueBtn}>
+                <Ionicons name="play" size={18} color={theme.green} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => removeFromQueue(i)} hitSlop={8} style={styles.queueBtn}>
+                <Ionicons name="close" size={18} color={theme.textMuted} />
+              </TouchableOpacity>
+            </>
+          )}
+        </RowWrap>
+      );
+    });
+  }, [upcoming, currentIndex, playAtIndex, playFromQueue, removeFromQueue]);
 
   const livePosition = duration ? Math.min(1, position / duration) : 0;
   // While the user is dragging the seek bar we show seekValue instead of the
@@ -431,55 +490,7 @@ export default function NowPlaying({ visible, onClose }) {
             scrollEventThrottle={16}
           >
             <View style={styles.tabContent}>
-              {upcoming.length === 0 ? (
-                <Text style={styles.empty}>Nothing up next.</Text>
-              ) : (
-                upcoming.map((s, i) => {
-                  const isQueue = s._from === 'queue';
-                  const isCurrent = !isQueue && s._idx === currentIndex;
-                  const isPlayed = !isQueue && s._idx < currentIndex;
-                  const RowWrap = isQueue ? View : TouchableOpacity;
-                  const rowProps = isQueue
-                    ? {}
-                    : { onPress: () => playAtIndex(s._idx), activeOpacity: 0.6 };
-                  return (
-                    <RowWrap
-                      key={`${s.id}-${i}`}
-                      style={[styles.queueRow, isPlayed && styles.queueRowPlayed]}
-                      {...rowProps}
-                    >
-                      {isCurrent ? (
-                        <Ionicons name="volume-medium" size={15} color={theme.green} style={styles.queueNumSlot} />
-                      ) : (
-                        <Text style={[styles.queueNum, isQueue && styles.queueNumQ]}>
-                          {isQueue ? '•' : s._idx + 1}
-                        </Text>
-                      )}
-                      <View style={styles.queueInfo}>
-                        <Text
-                          style={[styles.queueTitle, isCurrent && styles.queueTitleCurrent]}
-                          numberOfLines={1}
-                        >
-                          {s.title}
-                        </Text>
-                        <Text style={styles.queueArtist} numberOfLines={1}>
-                          {s.artist || (isQueue ? 'In queue' : 'PlayFool')}
-                        </Text>
-                      </View>
-                      {isQueue && (
-                        <>
-                          <TouchableOpacity onPress={() => playFromQueue(i)} hitSlop={8} style={styles.queueBtn}>
-                            <Ionicons name="play" size={18} color={theme.green} />
-                          </TouchableOpacity>
-                          <TouchableOpacity onPress={() => removeFromQueue(i)} hitSlop={8} style={styles.queueBtn}>
-                            <Ionicons name="close" size={18} color={theme.textMuted} />
-                          </TouchableOpacity>
-                        </>
-                      )}
-                    </RowWrap>
-                  );
-                })
-              )}
+              {upcomingList}
             </View>
           </ScrollView>
         ) : (

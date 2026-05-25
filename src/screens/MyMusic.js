@@ -10,6 +10,7 @@ import { reportError } from '../utils/errorReporter';
 import AddToPlaylistModal from '../components/AddToPlaylistModal';
 
 const SCAN_CACHE_KEY = 'playfool_mobile_scan_cache';
+const LIB_CACHE_KEY = 'playfool_mobile_lib_cache';
 
 export default function MyMusic() {
   const { playSong, shufflePlay, currentSong, isPlaying } = usePlayer();
@@ -20,16 +21,32 @@ export default function MyMusic() {
   const [query, setQuery] = useState('');
   const [addToPlaylistSong, setAddToPlaylistSong] = useState(null);
 
+  // Two-phase load: paint the cached library instantly so the screen
+  // doesn't feel like it's "scanning" every time the app opens, then
+  // refresh listLocalAudio in the background and update + re-cache.
   const load = useCallback(async () => {
-    setLoading(true);
+    let hasCached = false;
+    try {
+      const cachedLib = await AsyncStorage.getItem(LIB_CACHE_KEY);
+      if (cachedLib) {
+        try {
+          const list = JSON.parse(cachedLib);
+          if (Array.isArray(list) && list.length) { setDownloaded(list); hasCached = true; }
+        } catch (e) {}
+      }
+      const cachedScan = await AsyncStorage.getItem(SCAN_CACHE_KEY);
+      if (cachedScan) {
+        try { setScanned(JSON.parse(cachedScan)); } catch (e) {}
+      }
+    } catch (e) {}
+
+    // Spinner only on the very first launch (no cache) — otherwise the
+    // refresh runs silently behind the already-painted list.
+    if (!hasCached) setLoading(true);
     try {
       const list = await listLocalAudio();
       setDownloaded(list);
-      // Restore scan cache
-      const cached = await AsyncStorage.getItem(SCAN_CACHE_KEY);
-      if (cached) {
-        try { setScanned(JSON.parse(cached)); } catch (e) {}
-      }
+      AsyncStorage.setItem(LIB_CACHE_KEY, JSON.stringify(list)).catch(() => {});
     } catch (e) {
       reportError('mymusic.load', e);
     } finally {
