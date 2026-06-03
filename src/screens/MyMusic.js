@@ -1,5 +1,5 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, FlatList, TextInput, TouchableOpacity, StyleSheet, RefreshControl, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, FlatList, TextInput, TouchableOpacity, StyleSheet, RefreshControl, Alert, ActivityIndicator, ToastAndroid } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect } from '@react-navigation/native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -13,7 +13,7 @@ const SCAN_CACHE_KEY = 'playfool_mobile_scan_cache';
 const LIB_CACHE_KEY = 'playfool_mobile_lib_cache';
 
 export default function MyMusic() {
-  const { playSong, shufflePlay, currentSong, isPlaying } = usePlayer();
+  const { playSong, shufflePlay, currentSong, isPlaying, playNext, addToQueue } = usePlayer();
   const [downloaded, setDownloaded] = useState([]);
   const [scanned, setScanned] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -98,6 +98,34 @@ export default function MyMusic() {
   // don't show in PlayFool. They stay on the phone and reappear if the user
   // taps Scan Phone again. Downloaded songs (in our app folder) are actually
   // deleted from disk.
+  const showAddOptions = (song) => {
+    Alert.alert(
+      song.title,
+      'What do you want to do with this song?',
+      [
+        {
+          text: 'Play next',
+          onPress: () => {
+            playNext(song);
+            ToastAndroid.show('Playing next', ToastAndroid.SHORT);
+          },
+        },
+        {
+          text: 'Add to queue',
+          onPress: () => {
+            addToQueue(song);
+            ToastAndroid.show('Added to queue', ToastAndroid.SHORT);
+          },
+        },
+        {
+          text: 'Add to playlist',
+          onPress: () => setAddToPlaylistSong(song),
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
+  };
+
   const confirmDelete = (song) => {
     const isScanned = song.source === 'scanned';
     // SAF-stored files (source 'saf') delete silently without an Android
@@ -188,7 +216,7 @@ export default function MyMusic() {
                 <Text style={[styles.itemTitle, active && styles.itemTitleActive]} numberOfLines={1}>{item.title}</Text>
                 <Text style={styles.itemArtist} numberOfLines={1}>{item.artist || 'PlayFool'}</Text>
               </View>
-              <TouchableOpacity onPress={() => setAddToPlaylistSong(item)} style={styles.trashBtn}>
+              <TouchableOpacity onPress={() => showAddOptions(item)} style={styles.trashBtn}>
                 <Ionicons name="add-circle-outline" size={18} color={theme.textMuted} />
               </TouchableOpacity>
               <TouchableOpacity onPress={() => confirmDelete(item)} style={styles.trashBtn}>

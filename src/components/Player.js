@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Image, PanResponder } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { usePlayer } from '../context/PlayerContext';
@@ -17,6 +17,9 @@ export default function Player({ onExpand }) {
   const [showLyrics, setShowLyrics] = useState(false);
   const [seeking, setSeeking] = useState(false);
   const [seekValue, setSeekValue] = useState(0);
+  // After release, hold the bar at the dropped fraction until the player
+  // actually catches up — same pattern as the Now Playing seek bar.
+  const [postSeekTarget, setPostSeekTarget] = useState(null);
 
   // Draggable seek bar — measured in window coords, driven by absolute
   // screen X (gestureState) so it doesn't flicker over the thumb.
@@ -44,17 +47,32 @@ export default function Player({ onExpand }) {
       onPanResponderMove: (e, g) => { setSeekValue(seekFraction(g.moveX)); },
       onPanResponderRelease: (e, g) => {
         const f = seekFraction(g.moveX);
+        setSeekValue(f);
         seekTo(f * (seekRef.current.duration || 0));
+        setPostSeekTarget(f);
         setSeeking(false);
       },
       onPanResponderTerminate: () => setSeeking(false),
     })
   ).current;
 
+  // Release the post-seek hold once playback reaches the dropped target,
+  // with a 1.5s safety fallback in case TrackPlayer never reports it.
+  useEffect(() => {
+    if (postSeekTarget == null) return;
+    if (duration && Math.abs(position / duration - postSeekTarget) < 0.02) {
+      setPostSeekTarget(null);
+      return;
+    }
+    const t = setTimeout(() => setPostSeekTarget(null), 1500);
+    return () => clearTimeout(t);
+  }, [position, duration, postSeekTarget]);
+
   if (!currentSong) return null;
+  const livePos = duration ? Math.min(1, position / duration) : 0;
   const progress = seeking
     ? seekValue
-    : (duration ? Math.min(1, position / duration) : 0);
+    : (postSeekTarget != null ? postSeekTarget : livePos);
 
   return (
     <View style={styles.bar}>

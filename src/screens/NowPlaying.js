@@ -168,6 +168,10 @@ export default function NowPlaying({ visible, onClose }) {
   // Seek-bar drag state.
   const [seeking, setSeeking] = useState(false);
   const [seekValue, setSeekValue] = useState(0);
+  // After release, hold the bar at the dropped fraction until the player's
+  // reported position actually catches up — otherwise the bar snaps back
+  // to the stale polled value for a frame.
+  const [postSeekTarget, setPostSeekTarget] = useState(null);
   // collapsed = the big artwork is folded into a compact mini player at the
   // top, freeing space for the queue list / lyrics.
   const [collapsed, setCollapsed] = useState(false);
@@ -294,8 +298,24 @@ export default function NowPlaying({ visible, onClose }) {
 
   const livePosition = duration ? Math.min(1, position / duration) : 0;
   // While the user is dragging the seek bar we show seekValue instead of the
-  // live playback position, so the thumb tracks the finger smoothly.
-  const progress = seeking ? seekValue : livePosition;
+  // live playback position, so the thumb tracks the finger smoothly. After
+  // release we keep showing postSeekTarget until livePosition catches up.
+  const progress = seeking
+    ? seekValue
+    : (postSeekTarget != null ? postSeekTarget : livePosition);
+
+  // Clear the post-seek hold once playback position is within ~2% of the
+  // dropped target. A 1.5s safety timer releases the hold if the player
+  // never reports a matching position.
+  useEffect(() => {
+    if (postSeekTarget == null) return;
+    if (duration && Math.abs(position / duration - postSeekTarget) < 0.02) {
+      setPostSeekTarget(null);
+      return;
+    }
+    const t = setTimeout(() => setPostSeekTarget(null), 1500);
+    return () => clearTimeout(t);
+  }, [position, duration, postSeekTarget]);
 
   // Seek-bar geometry measured in WINDOW coordinates. Using absolute screen
   // X (gestureState.x0 / moveX) instead of nativeEvent.locationX avoids the
@@ -334,9 +354,8 @@ export default function NowPlaying({ visible, onClose }) {
         const f = seekFraction(g.moveX);
         setSeekValue(f);
         seekTo(f * (seekRef.current.duration || 0));
-        // Hold the bar at the dropped spot briefly — otherwise it snaps back
-        // to the stale polled position before TrackPlayer reports the seek.
-        setTimeout(() => setSeeking(false), 600);
+        setPostSeekTarget(f);
+        setSeeking(false);
       },
       onPanResponderTerminate: () => setSeeking(false),
     })
@@ -647,7 +666,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: theme.border,
     paddingHorizontal: 24, marginBottom: 8,
   },
-  tabBtn: { paddingVertical: 12, paddingHorizontal: 16, marginRight: 8 },
+  tabBtn: { flex: 1, paddingVertical: 12, alignItems: 'center' },
   tabBtnActive: { borderBottomWidth: 2, borderBottomColor: theme.green },
   tabText: { color: theme.textSecondary, fontSize: 12, fontWeight: '700', letterSpacing: 1.2, textTransform: 'uppercase' },
   tabTextActive: { color: theme.green },
