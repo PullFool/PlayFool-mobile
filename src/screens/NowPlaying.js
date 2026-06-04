@@ -303,6 +303,11 @@ export default function NowPlaying({ visible, onClose }) {
   const progress = seeking
     ? seekValue
     : (postSeekTarget != null ? postSeekTarget : livePosition);
+  // Same hold logic for the time text so it doesn't snap to the stale
+  // position for a frame after the user lets go.
+  const displayPosition = seeking
+    ? seekValue * duration
+    : (postSeekTarget != null ? postSeekTarget * duration : position);
 
   // Clear the post-seek hold once playback position is within ~2% of the
   // dropped target. A 1.5s safety timer releases the hold if the player
@@ -339,16 +344,36 @@ export default function NowPlaying({ visible, onClose }) {
     return Math.min(1, Math.max(0, (screenX - x) / (width || 1)));
   };
 
+  // Live scrubbing — seek WHILE the finger moves so the audio "rewinds /
+  // fast-forwards" instead of staying silent until release. 120ms is the
+  // sweet spot: tight enough to feel responsive, loose enough that
+  // react-native-track-player's seekTo doesn't pop. The release handler still
+  // does a final seekTo, so the audio lands exactly on the drop point.
+  const seekThrottleRef = useRef(0);
+
   const seekPan = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: (e, g) => {
         setSeeking(true);
-        setSeekValue(seekFraction(g.x0));
+        const f = seekFraction(g.x0);
+        setSeekValue(f);
+        const dur = seekRef.current.duration || 0;
+        if (dur) {
+          seekTo(f * dur);
+          seekThrottleRef.current = Date.now();
+        }
       },
       onPanResponderMove: (e, g) => {
-        setSeekValue(seekFraction(g.moveX));
+        const f = seekFraction(g.moveX);
+        setSeekValue(f);
+        const dur = seekRef.current.duration || 0;
+        const now = Date.now();
+        if (dur && now - seekThrottleRef.current >= 120) {
+          seekTo(f * dur);
+          seekThrottleRef.current = now;
+        }
       },
       onPanResponderRelease: (e, g) => {
         const f = seekFraction(g.moveX);
@@ -407,16 +432,20 @@ export default function NowPlaying({ visible, onClose }) {
                 <Ionicons name="play-skip-forward" size={22} color={theme.textPrimary} />
               </TouchableOpacity>
             </View>
-            <View
-              ref={trackRef}
-              style={styles.miniProgressTouch}
-              onLayout={measureTrack}
-              {...seekPan.panHandlers}
-            >
-              <View style={styles.miniProgressTrack}>
-                <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+            <View style={styles.miniProgressRow}>
+              <Text style={styles.miniTime}>{fmt(displayPosition)}</Text>
+              <View
+                ref={trackRef}
+                style={styles.miniProgressTouch}
+                onLayout={measureTrack}
+                {...seekPan.panHandlers}
+              >
+                <View style={styles.miniProgressTrack}>
+                  <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+                </View>
+                <View style={[styles.miniProgressThumb, { left: `${progress * 100}%` }]} />
               </View>
-              <View style={[styles.miniProgressThumb, { left: `${progress * 100}%` }]} />
+              <Text style={styles.miniTime}>{fmt(duration)}</Text>
             </View>
           </View>
         ) : (
@@ -442,7 +471,7 @@ export default function NowPlaying({ visible, onClose }) {
 
             {/* Progress — draggable seek bar */}
             <View style={styles.progressRow}>
-              <Text style={styles.time}>{fmt(seeking ? seekValue * duration : position)}</Text>
+              <Text style={styles.time}>{fmt(displayPosition)}</Text>
               <View
                 ref={trackRef}
                 style={styles.progressTouch}
@@ -606,7 +635,9 @@ const styles = StyleSheet.create({
   miniTitle: { color: theme.textPrimary, fontSize: 14, fontWeight: '700' },
   miniArtist: { color: theme.textSecondary, fontSize: 12, marginTop: 1 },
   miniBtn: { padding: 6 },
-  miniProgressTouch: { height: 16, justifyContent: 'center', marginTop: 2 },
+  miniProgressRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 },
+  miniProgressTouch: { flex: 1, height: 16, justifyContent: 'center' },
+  miniTime: { color: theme.textMuted, fontSize: 10, fontVariant: ['tabular-nums'], width: 34, textAlign: 'center' },
   miniProgressTrack: { height: 3, backgroundColor: theme.bgSurface, borderRadius: 2, overflow: 'hidden' },
   miniProgressThumb: {
     position: 'absolute', width: 10, height: 10, borderRadius: 5,
