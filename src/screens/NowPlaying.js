@@ -182,8 +182,12 @@ export default function NowPlaying({ visible, onClose }) {
   }, [visible]);
 
   // Expand/collapse the header with a smooth layout animation.
+  // Skipping LayoutAnimation here — animating the expanded-to-mini transition
+  // on Android crashes natively when the mini header carries a flex row with
+  // the new current/duration time texts. No JS-visible error reaches the
+  // Discord reporter because the failure happens in the native animation
+  // pipeline. Without the animation the transition is instant but stable.
   const setCollapsedAnimated = (val) => {
-    LayoutAnimation.configureNext(LayoutAnimation.create(150, 'easeInEaseOut', 'opacity'));
     setCollapsed(val);
   };
 
@@ -344,36 +348,16 @@ export default function NowPlaying({ visible, onClose }) {
     return Math.min(1, Math.max(0, (screenX - x) / (width || 1)));
   };
 
-  // Live scrubbing — seek WHILE the finger moves so the audio "rewinds /
-  // fast-forwards" instead of staying silent until release. 120ms is the
-  // sweet spot: tight enough to feel responsive, loose enough that
-  // react-native-track-player's seekTo doesn't pop. The release handler still
-  // does a final seekTo, so the audio lands exactly on the drop point.
-  const seekThrottleRef = useRef(0);
-
   const seekPan = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: (e, g) => {
         setSeeking(true);
-        const f = seekFraction(g.x0);
-        setSeekValue(f);
-        const dur = seekRef.current.duration || 0;
-        if (dur) {
-          seekTo(f * dur);
-          seekThrottleRef.current = Date.now();
-        }
+        setSeekValue(seekFraction(g.x0));
       },
       onPanResponderMove: (e, g) => {
-        const f = seekFraction(g.moveX);
-        setSeekValue(f);
-        const dur = seekRef.current.duration || 0;
-        const now = Date.now();
-        if (dur && now - seekThrottleRef.current >= 120) {
-          seekTo(f * dur);
-          seekThrottleRef.current = now;
-        }
+        setSeekValue(seekFraction(g.moveX));
       },
       onPanResponderRelease: (e, g) => {
         const f = seekFraction(g.moveX);
