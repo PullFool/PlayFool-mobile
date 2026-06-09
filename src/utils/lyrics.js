@@ -157,10 +157,88 @@ async function getLrclib(artist, track) {
   }
 }
 
+// Genius scraper — last-ditch fallback for OPM/niche tracks neither lrclib
+// nor NetEase has indexed. Genius blocks bare requests; we have to pass a
+// browser-shaped User-Agent or the search endpoint 403s. Genius doesn't
+// expose lyrics through the API — we scrape them from the song page's
+// data-lyrics-container divs. Plain text only (no synced timestamps).
+const GENIUS_HEADERS = {
+  'User-Agent':
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  Accept: 'application/json, text/html, */*',
+  'Accept-Language': 'en-US,en;q=0.9',
+};
+
+async function searchGenius(query) {
+  try {
+    const res = await fetch(
+      `https://genius.com/api/search/multi?q=${encodeURIComponent(query)}&per_page=5`,
+      { headers: GENIUS_HEADERS },
+    );
+    if (!res.ok) return [];
+    const json = await res.json();
+    const sections = json?.response?.sections || [];
+    const songSection = sections.find((s) => s.type === 'song');
+    return (songSection?.hits || []).map((h) => ({
+      id: h.result.id,
+      name: h.result.title,
+      artist: h.result.primary_artist?.name || '',
+      url: h.result.url,
+    }));
+  } catch (e) {
+    return [];
+  }
+}
+
+async function fetchGeniusLyricsByUrl(url) {
+  try {
+    const res = await fetch(url, { headers: GENIUS_HEADERS });
+    if (!res.ok) return null;
+    const html = await res.text();
+    const re = /<div[^>]*data-lyrics-container="true"[^>]*>([\s\S]*?)<\/div>/g;
+    const chunks = [];
+    let m;
+    while ((m = re.exec(html)) !== null) chunks.push(m[1]);
+    if (chunks.length === 0) return null;
+    const text = chunks.join('<br>')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<[^>]+>/g, '')
+      .replace(/&#x27;|&apos;/g, "'")
+      .replace(/&quot;/g, '"')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    return text || null;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function searchGeniusResults(title) {
+  const hits = await searchGenius(title);
+  if (!hits.length) return [];
+  // Take the top hit only — fetching every hit's full page is expensive and
+  // most of the time the top match is right.
+  const top = hits[0];
+  const lyrics = await fetchGeniusLyricsByUrl(top.url);
+  if (!lyrics) return [];
+  return [{
+    id: `genius-${top.id}`,
+    name: top.name,
+    artistName: top.artist,
+    syncedLyrics: null,
+    plainLyrics: lyrics,
+    duration: null,
+  }];
+}
+
 // Fetch lyrics for a song. Tries lrclib first (precise /api/get when the title
-// parses to "Artist - Track", then fuzzy multi-variant /api/search), then falls
-// back to NetEase Music for the songs lrclib doesn't have — OPM and Asian
-// tracks especially. The function name is kept for backward compatibility.
+// parses to "Artist - Track", then fuzzy multi-variant /api/search), then
+// NetEase Music, then Genius. Each fallback only fires when the previous one
+// found nothing, so a typical lrclib-known song still resolves in one round
+// trip. The function name is kept for backward compatibility.
 export async function fetchLrclibResults(title) {
   const at = parseArtistTitle(title);
   if (at) {
@@ -171,13 +249,12 @@ export async function fetchLrclibResults(title) {
     const results = await searchLrclib(query);
     if (results) return results;
   }
-  // NetEase fallback — only reached when lrclib found nothing across all
-  // search variants. We use the cleaned title because NetEase's fuzzy match
-  // handles spaces / casing well.
   const cleaned = cleanTitle(title);
   if (cleaned) {
     const neteaseResults = await searchNetease(cleaned);
     if (neteaseResults.length > 0) return neteaseResults;
+    const geniusResults = await searchGeniusResults(cleaned);
+    if (geniusResults.length > 0) return geniusResults;
   }
   return [];
 }
