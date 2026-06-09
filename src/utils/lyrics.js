@@ -79,6 +79,67 @@ async function searchLrclib(query) {
   }
 }
 
+// NetEase Music fallback — far stronger OPM / Asian coverage than lrclib.
+// Unofficial API but widely used and stable for years. Headers matter — the
+// endpoint will refuse requests without a NetEase-looking Referer.
+const NETEASE_HEADERS = {
+  Accept: 'application/json',
+  Referer: 'https://music.163.com',
+  'User-Agent': 'Mozilla/5.0',
+};
+
+async function fetchNeteaseLyricsById(songId) {
+  try {
+    const res = await fetch(
+      `https://music.163.com/api/song/lyric?id=${songId}&lv=1&kv=1&tv=-1`,
+      { headers: NETEASE_HEADERS },
+    );
+    if (!res.ok) return null;
+    const json = await res.json();
+    const synced = json?.lrc?.lyric;
+    if (!synced) return null;
+    const plain = synced.replace(/\[\d+:\d+\.\d+\]/g, '').replace(/\n{2,}/g, '\n').trim() || null;
+    return { synced, plain };
+  } catch (e) {
+    return null;
+  }
+}
+
+async function searchNetease(query) {
+  try {
+    const res = await fetch(
+      `https://music.163.com/api/search/get?s=${encodeURIComponent(query)}&type=1&limit=5`,
+      { headers: NETEASE_HEADERS },
+    );
+    if (!res.ok) return [];
+    const json = await res.json();
+    const songs = json?.result?.songs || [];
+    if (songs.length === 0) return [];
+
+    // Try top 3 results — the first match in NetEase isn't always the one
+    // with usable lyrics (instrumentals, alt versions). Stop at the first
+    // that returns a non-empty synced track.
+    const out = [];
+    for (const song of songs.slice(0, 3)) {
+      const lyrics = await fetchNeteaseLyricsById(song.id);
+      if (lyrics) {
+        out.push({
+          id: `netease-${song.id}`,
+          name: song.name,
+          artistName: (song.artists || []).map((a) => a.name).filter(Boolean).join(', '),
+          syncedLyrics: lyrics.synced,
+          plainLyrics: lyrics.plain,
+          duration: song.duration ? Math.round(song.duration / 1000) : null,
+        });
+        break;
+      }
+    }
+    return out;
+  } catch (e) {
+    return [];
+  }
+}
+
 // Precise lookup — lrclib /api/get with an exact artist + track. Returns the
 // single match or null. This is far more accurate than the fuzzy search,
 // which returns *something* for almost any query.
@@ -96,9 +157,10 @@ async function getLrclib(artist, track) {
   }
 }
 
-// Fetch lrclib results for a song. Precise /api/get FIRST when the title
-// parses to "Artist - Track" (accurate), then the fuzzy multi-variant
-// /api/search as a fallback for names that don't parse cleanly.
+// Fetch lyrics for a song. Tries lrclib first (precise /api/get when the title
+// parses to "Artist - Track", then fuzzy multi-variant /api/search), then falls
+// back to NetEase Music for the songs lrclib doesn't have — OPM and Asian
+// tracks especially. The function name is kept for backward compatibility.
 export async function fetchLrclibResults(title) {
   const at = parseArtistTitle(title);
   if (at) {
@@ -108,6 +170,14 @@ export async function fetchLrclibResults(title) {
   for (const query of getSearchVariants(title)) {
     const results = await searchLrclib(query);
     if (results) return results;
+  }
+  // NetEase fallback — only reached when lrclib found nothing across all
+  // search variants. We use the cleaned title because NetEase's fuzzy match
+  // handles spaces / casing well.
+  const cleaned = cleanTitle(title);
+  if (cleaned) {
+    const neteaseResults = await searchNetease(cleaned);
+    if (neteaseResults.length > 0) return neteaseResults;
   }
   return [];
 }
