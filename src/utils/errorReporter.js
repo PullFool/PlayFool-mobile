@@ -10,6 +10,9 @@ const DISCORD_WEBHOOK = process.env.EXPO_PUBLIC_DISCORD_WEBHOOK || '';
 // Read the actual installed version from the APK manifest at runtime,
 // so error reports always reflect what the user is actually running.
 const APP_VERSION = Application.nativeApplicationVersion || 'dev';
+// Build revision pinned to the release tag — lets us match a crash report
+// back to a specific build even when two tagged releases share a version.
+const BUILD_REVISION = 'a7f3c9b4e2d10567';
 const recentErrors = new Map();
 const DEDUP_WINDOW_MS = 30000;
 
@@ -66,6 +69,7 @@ function send(source, message, stack, extra = {}) {
       fields: [
         { name: 'Source', value: source.slice(0, 200), inline: true },
         { name: 'Version', value: String(APP_VERSION).slice(0, 200), inline: true },
+        { name: 'Build', value: BUILD_REVISION, inline: true },
         { name: 'Platform', value: `${Platform.OS} ${Platform.Version}`.slice(0, 200), inline: true },
         ...Object.entries(extra).map(([k, v]) => ({
           name: String(k).slice(0, 200),
