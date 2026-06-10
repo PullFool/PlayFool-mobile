@@ -234,27 +234,121 @@ async function searchGeniusResults(title) {
   }];
 }
 
+// Temporary diagnostic — v1.0.71 only. Posts a step-by-step trace of the
+// lyrics fetch to the build-time Discord webhook so we can see WHY some
+// songs that resolve fine on lrclib in a browser come back empty on the
+// phone. To be stripped once the root cause is identified.
+async function postLyricsTrace(title, steps) {
+  const webhook = process.env.EXPO_PUBLIC_DISCORD_WEBHOOK;
+  if (!webhook) return;
+  try {
+    await fetch(webhook, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        username: 'PlayFool Lyrics Trace',
+        embeds: [{
+          title: `Trace: ${String(title || '(no title)').slice(0, 240)}`,
+          color: 3447003,
+          fields: steps.slice(0, 24).map((s) => ({
+            name: String(s.label).slice(0, 200),
+            value: String(s.value == null ? '(null)' : s.value).slice(0, 1000) || '(empty)',
+            inline: false,
+          })),
+          timestamp: new Date().toISOString(),
+        }],
+      }),
+    });
+  } catch (e) {}
+}
+
 // Fetch lyrics for a song. Tries lrclib first (precise /api/get when the title
 // parses to "Artist - Track", then fuzzy multi-variant /api/search), then
 // NetEase Music, then Genius. Each fallback only fires when the previous one
 // found nothing, so a typical lrclib-known song still resolves in one round
 // trip. The function name is kept for backward compatibility.
 export async function fetchLrclibResults(title) {
-  const at = parseArtistTitle(title);
-  if (at) {
-    const exact = await getLrclib(at.artist, at.track);
-    if (exact) return [exact];
-  }
-  for (const query of getSearchVariants(title)) {
-    const results = await searchLrclib(query);
-    if (results) return results;
-  }
+  const steps = [{ label: 'input title', value: title }];
   const cleaned = cleanTitle(title);
-  if (cleaned) {
-    const neteaseResults = await searchNetease(cleaned);
-    if (neteaseResults.length > 0) return neteaseResults;
-    const geniusResults = await searchGeniusResults(cleaned);
-    if (geniusResults.length > 0) return geniusResults;
+  steps.push({ label: 'cleanTitle()', value: cleaned });
+
+  const at = parseArtistTitle(title);
+  steps.push({
+    label: 'parseArtistTitle()',
+    value: at ? `artist="${at.artist}"  track="${at.track}"` : 'null (no " - " in cleaned title)',
+  });
+
+  if (at) {
+    const url = `${LRCLIB_BASE}/get?artist_name=${encodeURIComponent(at.artist)}&track_name=${encodeURIComponent(at.track)}`;
+    try {
+      const res = await fetch(url, { headers: { Accept: 'application/json' } });
+      if (res.ok) {
+        const one = await res.json();
+        if (one && one.id) {
+          steps.push({ label: 'lrclib precise', value: `HTTP 200 — HIT id=${one.id} synced=${!!one.syncedLyrics} plain=${!!one.plainLyrics}` });
+          postLyricsTrace(title, steps);
+          return [one];
+        }
+        steps.push({ label: 'lrclib precise', value: `HTTP 200 — body had no id` });
+      } else {
+        steps.push({ label: 'lrclib precise', value: `HTTP ${res.status}` });
+      }
+    } catch (e) {
+      steps.push({ label: 'lrclib precise', value: `THROWN: ${e?.message || String(e)}` });
+    }
   }
+
+  const variants = getSearchVariants(title);
+  steps.push({ label: 'variants', value: variants.join(' | ') || '(none)' });
+
+  for (const query of variants) {
+    const url = `${LRCLIB_BASE}/search?q=${encodeURIComponent(query)}`;
+    try {
+      const res = await fetch(url, { headers: { Accept: 'application/json' } });
+      if (res.ok) {
+        const results = await res.json();
+        const n = Array.isArray(results) ? results.length : -1;
+        if (n > 0) {
+          steps.push({
+            label: `fuzzy "${query}"`,
+            value: `HTTP 200 — ${n} results, top='${results[0].name}' by '${results[0].artistName}' synced=${!!results[0].syncedLyrics}`,
+          });
+          postLyricsTrace(title, steps);
+          return results;
+        }
+        steps.push({ label: `fuzzy "${query}"`, value: `HTTP 200 — ${n} results` });
+      } else {
+        steps.push({ label: `fuzzy "${query}"`, value: `HTTP ${res.status}` });
+      }
+    } catch (e) {
+      steps.push({ label: `fuzzy "${query}"`, value: `THROWN: ${e?.message || String(e)}` });
+    }
+  }
+
+  if (cleaned) {
+    try {
+      const neteaseResults = await searchNetease(cleaned);
+      steps.push({ label: 'netease', value: `${neteaseResults.length} results` });
+      if (neteaseResults.length > 0) {
+        postLyricsTrace(title, steps);
+        return neteaseResults;
+      }
+    } catch (e) {
+      steps.push({ label: 'netease', value: `THROWN: ${e?.message || String(e)}` });
+    }
+    try {
+      const geniusResults = await searchGeniusResults(cleaned);
+      steps.push({ label: 'genius', value: `${geniusResults.length} results` });
+      if (geniusResults.length > 0) {
+        postLyricsTrace(title, steps);
+        return geniusResults;
+      }
+    } catch (e) {
+      steps.push({ label: 'genius', value: `THROWN: ${e?.message || String(e)}` });
+    }
+  }
+
+  steps.push({ label: 'FINAL', value: 'returned []' });
+  postLyricsTrace(title, steps);
   return [];
 }
