@@ -105,6 +105,18 @@ async function fetchNeteaseLyricsById(songId) {
   }
 }
 
+// Reject lyrics that look like a Chinese cover/version when the query was
+// in Latin script. NetEase indexes a lot of CJK songs that share a Western
+// title — without this guard, "Binibini" returned a Chinese namesake's
+// fully-CJK lyrics. Anything over ~30% CJK characters is treated as a
+// language mismatch.
+function isMostlyCJK(text) {
+  if (!text) return false;
+  const cjk = (text.match(/[　-〿぀-ゟ゠-ヿ㐀-䶿一-鿿가-힯]/g) || []).length;
+  const meaningful = text.replace(/[\[\]\d:.\s\n]/g, '').length;
+  return meaningful > 0 && cjk / meaningful > 0.3;
+}
+
 async function searchNetease(query) {
   try {
     const res = await fetch(
@@ -116,23 +128,22 @@ async function searchNetease(query) {
     const songs = json?.result?.songs || [];
     if (songs.length === 0) return [];
 
-    // Try top 3 results — the first match in NetEase isn't always the one
-    // with usable lyrics (instrumentals, alt versions). Stop at the first
-    // that returns a non-empty synced track.
+    // Return every top-3 candidate that has lyrics AND isn't mostly CJK,
+    // so the user has "Try next" alternatives instead of being stuck with
+    // a single wrong match.
     const out = [];
     for (const song of songs.slice(0, 3)) {
       const lyrics = await fetchNeteaseLyricsById(song.id);
-      if (lyrics) {
-        out.push({
-          id: `netease-${song.id}`,
-          name: song.name,
-          artistName: (song.artists || []).map((a) => a.name).filter(Boolean).join(', '),
-          syncedLyrics: lyrics.synced,
-          plainLyrics: lyrics.plain,
-          duration: song.duration ? Math.round(song.duration / 1000) : null,
-        });
-        break;
-      }
+      if (!lyrics) continue;
+      if (isMostlyCJK(lyrics.synced)) continue;
+      out.push({
+        id: `netease-${song.id}`,
+        name: song.name,
+        artistName: (song.artists || []).map((a) => a.name).filter(Boolean).join(', '),
+        syncedLyrics: lyrics.synced,
+        plainLyrics: lyrics.plain,
+        duration: song.duration ? Math.round(song.duration / 1000) : null,
+      });
     }
     return out;
   } catch (e) {
@@ -219,19 +230,24 @@ async function fetchGeniusLyricsByUrl(url) {
 async function searchGeniusResults(title) {
   const hits = await searchGenius(title);
   if (!hits.length) return [];
-  // Take the top hit only — fetching every hit's full page is expensive and
-  // most of the time the top match is right.
-  const top = hits[0];
-  const lyrics = await fetchGeniusLyricsByUrl(top.url);
-  if (!lyrics) return [];
-  return [{
-    id: `genius-${top.id}`,
-    name: top.name,
-    artistName: top.artist,
-    syncedLyrics: null,
-    plainLyrics: lyrics,
-    duration: null,
-  }];
+  // Pull the top 3 hits in parallel so the user has "Try next" candidates
+  // when the top match is wrong (Genius's first hit isn't always the OPM
+  // original — sometimes it's a cover or sample).
+  const top = hits.slice(0, 3);
+  const lyricsByHit = await Promise.all(top.map((h) => fetchGeniusLyricsByUrl(h.url)));
+  const out = [];
+  for (let i = 0; i < top.length; i++) {
+    if (!lyricsByHit[i]) continue;
+    out.push({
+      id: `genius-${top[i].id}`,
+      name: top[i].name,
+      artistName: top[i].artist,
+      syncedLyrics: null,
+      plainLyrics: lyricsByHit[i],
+      duration: null,
+    });
+  }
+  return out;
 }
 
 // Temporary diagnostic — v1.0.71 only. Posts a step-by-step trace of the
