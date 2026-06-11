@@ -219,6 +219,14 @@ export default function NowPlaying({ visible, onClose }) {
     reloadLyrics();
   };
 
+  // Wipe the reject list for this song and re-fetch from the top — so a user
+  // who blew past the correct match while spamming "Try next" can recover.
+  const resetRejected = async () => {
+    if (!lyrics?.songKey) return;
+    await saveRejected(lyrics.songKey, []);
+    reloadLyrics();
+  };
+
   const markWrong = () => {
     if (!lyrics?.songKey || !lyrics?.sourceId) return;
     Alert.alert(
@@ -545,6 +553,10 @@ export default function NowPlaying({ visible, onClose }) {
                   <Ionicons name="musical-notes-outline" size={40} color={theme.textMuted} />
                   <Text style={styles.lyricsTitle}>No more matches to try</Text>
                   <Text style={styles.lyricsHint}>You've rejected all matches for this song.</Text>
+                  <TouchableOpacity onPress={resetRejected} style={styles.startOverBtn}>
+                    <Ionicons name="refresh" size={14} color={theme.green} />
+                    <Text style={styles.startOverText}>Start over</Text>
+                  </TouchableOpacity>
                 </View>
               )}
               {lyrics.status === 'error' && (
@@ -701,6 +713,12 @@ const styles = StyleSheet.create({
   queueArtist: { color: theme.textSecondary, fontSize: 11, marginTop: 1 },
   queueBtn: { padding: 6 },
   lyricsCenter: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: 32 },
+  startOverBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    marginTop: 16, paddingVertical: 8, paddingHorizontal: 16,
+    borderRadius: 16, borderWidth: 1, borderColor: theme.green,
+  },
+  startOverText: { color: theme.green, fontSize: 13, fontWeight: '700' },
   lyricsTitle: { color: theme.textPrimary, fontSize: 14, fontWeight: '700', marginTop: 10 },
   lyricsHint: { color: theme.textMuted, fontSize: 12, marginTop: 6, textAlign: 'center', paddingHorizontal: 24 },
   lyricsBody: { color: theme.textPrimary, fontSize: 14, lineHeight: 22 },
