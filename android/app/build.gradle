@@ -2,13 +2,6 @@ apply plugin: "com.android.application"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
-// ffmpeg-kit-react-native — use the "audio" prebuilt so the APK only pulls
-// in audio codecs (mp3, aac, etc.) and the loudnorm filter we need for
-// volume normalization, instead of the full ~100MB video+audio bundle.
-ext {
-    ffmpegKitPackage = "audio"
-}
-
 def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 
 static def versionToNumber(major, minor, patch) {
