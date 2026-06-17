@@ -10,6 +10,8 @@ import SyncScreen from './SyncScreen';
 import { recordHeart, HEARTED_KEY as HEART_KEY } from '../utils/hearts';
 import { EQ_AVAILABLE } from '../utils/eq';
 import { setCrossfadeSeconds } from '../utils/crossfade';
+import { listLocalAudio } from '../utils/yt';
+import { runBatchNormalize, subscribeBatch, getNormalizationCount } from '../utils/normalize';
 
 const KOFI_URL = 'https://ko-fi.com/PullFool';
 
@@ -19,6 +21,18 @@ export default function Settings() {
   const [showSync, setShowSync] = useState(false);
   const [hasHearted, setHasHearted] = useState(false);
   const [crossfade, setCrossfade] = useState(0);
+  const [songs, setSongs] = useState([]);
+  const [normalizedCount, setNormalizedCount] = useState(0);
+  const [batchState, setBatchState] = useState({ running: false, total: 0, done: 0, currentFile: '' });
+
+  const refreshNormalizeStatus = async () => {
+    try {
+      const list = await listLocalAudio();
+      setSongs(list);
+      const count = await getNormalizationCount(list.map((s) => s.url).filter(Boolean));
+      setNormalizedCount(count);
+    } catch (e) {}
+  };
 
   useEffect(() => {
     AsyncStorage.getItem(HEART_KEY).then((v) => setHasHearted(v === '1'));
@@ -26,7 +40,17 @@ export default function Settings() {
       const n = parseInt(v || '0', 10);
       setCrossfade(isNaN(n) ? 0 : n);
     });
+    refreshNormalizeStatus();
+    const unsub = subscribeBatch((s) => {
+      setBatchState(s);
+      if (!s.running) refreshNormalizeStatus();
+    });
+    return () => unsub();
   }, []);
+
+  const onStartNormalize = () => {
+    runBatchNormalize(songs);
+  };
 
   const onCrossfadeChange = (s) => {
     setCrossfade(s);
@@ -89,14 +113,38 @@ export default function Settings() {
       <View style={styles.section}>
         <Text style={styles.label}>Volume normalization</Text>
         <Text style={styles.help}>
-          Songs are normalized to -14 LUFS on the desktop app. When you sync
-          your library here, the normalized versions come down with it — so
-          quiet and loud tracks play at the same perceived loudness on the
-          phone too.{'\n\n'}
-          Songs you download directly on the phone aren't normalized yet
-          (the ffmpeg native build that would do it on Android was retired
-          upstream). To normalize them, sync to your PC and back.
+          Equalizes every song to -14 LUFS (Spotify's target) so quiet and loud
+          tracks sound the same. Songs are processed once and remembered.
         </Text>
+        <Text style={[styles.help, { marginTop: 4 }]}>
+          {normalizedCount} / {songs.length} songs normalized
+        </Text>
+        {batchState.running ? (
+          <View style={{ marginTop: 12 }}>
+            <View style={{ height: 6, backgroundColor: theme.bgPrimary, borderRadius: 3, overflow: 'hidden' }}>
+              <View style={{
+                height: '100%', backgroundColor: theme.green,
+                width: `${batchState.total ? (batchState.done / batchState.total) * 100 : 0}%`,
+              }} />
+            </View>
+            <Text style={[styles.help, { marginTop: 6, fontSize: 11 }]} numberOfLines={1}>
+              {batchState.done}/{batchState.total} — {batchState.currentFile}
+            </Text>
+          </View>
+        ) : (
+          <TouchableOpacity
+            style={[styles.themeBtn, { opacity: (songs.length - normalizedCount) > 0 ? 1 : 0.5 }]}
+            onPress={onStartNormalize}
+            disabled={(songs.length - normalizedCount) <= 0}
+          >
+            <Ionicons name="volume-medium" size={16} color={theme.textPrimary} />
+            <Text style={styles.themeBtnText}>
+              {(songs.length - normalizedCount) > 0
+                ? `Normalize ${songs.length - normalizedCount} remaining`
+                : 'All songs normalized'}
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       <View style={styles.section}>

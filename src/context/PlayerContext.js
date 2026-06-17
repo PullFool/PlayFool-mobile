@@ -114,6 +114,16 @@ export function PlayerProvider({ children }) {
     if (event.type === Event.PlaybackActiveTrackChanged) {
       // Sync currentIndex from the active track id when TrackPlayer moves on its own
       try {
+        // Capture the song that was playing BEFORE we move currentIndex on,
+        // so we can hand it to the normalizer once it's no longer locked by
+        // playback. Fire-and-forget — the normalizer skips files it's
+        // already processed.
+        const prev = currentIndexRef.current >= 0 ? songsRef.current[currentIndexRef.current] : null;
+        if (prev && prev.url) {
+          import('../utils/normalize').then(({ normalizeAudio }) => {
+            normalizeAudio(prev.url).catch(() => {});
+          }).catch(() => {});
+        }
         const active = await TrackPlayer.getActiveTrack();
         if (!active) return;
         const idx = songsRef.current.findIndex((s) => String(s.id) === String(active.id));
