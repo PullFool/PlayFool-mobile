@@ -23,6 +23,16 @@ buildscript {
 
 apply plugin: "com.facebook.react.rootproject"
 
+// ffmpeg-kit-react-native reads rootProject.ext.ffmpegKitPackage to decide
+// which com.arthenica:ffmpeg-kit-<variant> artifact to pull. Setting it on
+// the :app subproject (where it lived in v1.0.77) leaves rootProject's ext
+// untouched, so the library falls back to the default "https" variant —
+// which is the one the CI build was failing to resolve. Set it here so
+// safeExtGet() actually finds it.
+ext {
+    ffmpegKitPackage = "audio"
+}
+
 allprojects {
     repositories {
         maven {

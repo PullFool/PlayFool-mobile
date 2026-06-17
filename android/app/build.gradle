@@ -5,13 +5,10 @@ apply plugin: "com.facebook.react"
 // ffmpeg-kit-react-native pulls com.arthenica:ffmpeg-kit-* but Arthenica
 // retired the project in 2025 and pulled the artifacts off Maven Central,
 // so the original coordinates no longer resolve. io.github.maxrave-dev
-// rebuilt and republished the audio variant under their own groupId — we
-// substitute it in here and pick the same "audio" subset (libmp3lame +
+// rebuilt and republished the audio variant under their own groupId — the
+// substitution below redirects to that mirror. The matching ext block in
+// the root android/build.gradle picks the "audio" subset (libmp3lame +
 // loudnorm filter) we need for -14 LUFS normalization.
-ext {
-    ffmpegKitPackage = "audio"
-}
-
 configurations.all {
     resolutionStrategy.dependencySubstitution {
         substitute(module("com.arthenica:ffmpeg-kit-audio"))
