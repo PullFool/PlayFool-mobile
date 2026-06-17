@@ -33,6 +33,22 @@ ext {
     ffmpegKitPackage = "audio"
 }
 
+// Arthenica retired com.arthenica:ffmpeg-kit-* in 2025, so we route every
+// subproject's resolve through io.github.maxrave-dev's community mirror.
+// Has to live in allprojects (not just :app) because the broken dependency
+// is declared INSIDE the :ffmpeg-kit-react-native autolinked subproject —
+// putting the substitute clause on :app alone, like v1.0.77/v1.0.78 did,
+// never gets a chance to rewrite that request.
+allprojects {
+    configurations.all {
+        resolutionStrategy.dependencySubstitution {
+            substitute(module("com.arthenica:ffmpeg-kit-audio"))
+                .using(module("io.github.maxrave-dev:ffmpeg-kit-audio:6.0.1"))
+                .withoutClassifier()
+        }
+    }
+}
+
 allprojects {
     repositories {
         maven {
