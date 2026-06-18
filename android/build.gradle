@@ -44,7 +44,6 @@ allprojects {
         resolutionStrategy.dependencySubstitution {
             substitute(module("com.arthenica:ffmpeg-kit-audio"))
                 .using(module("io.github.maxrave-dev:ffmpeg-kit-audio:6.0.1"))
-                .withoutClassifier()
         }
     }
 }
