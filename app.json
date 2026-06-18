@@ -2,7 +2,7 @@
   "expo": {
     "name": "PlayFool",
     "slug": "playfool-mobile",
-    "version": "1.0.79",
+    "version": "1.0.80",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -41,7 +41,7 @@
             "compileSdkVersion": 34,
             "targetSdkVersion": 34,
             "buildToolsVersion": "34.0.0",
-            "minSdkVersion": 23,
+            "minSdkVersion": 24,
             "kotlinVersion": "1.9.24"
           }
         }
